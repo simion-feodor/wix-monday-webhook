@@ -15,37 +15,67 @@ BOARD_ID = 804109007
 GROUP_ID = 'new_group3802'
 
 
+def to_int(val):
+    """Try to convert value to int. Return None if not possible."""
+    if val is None:
+        return None
+    try:
+        return int(str(val).strip())
+    except (ValueError, TypeError):
+        return None
+
+
 def create_monday_item(order):
     col_vals = {}
-    if order.get('order_number'):
-        col_vals['numbers1'] = order['order_number']
+
+    # CMD (numbers1) — must be integer
+    num = to_int(order.get('order_number'))
+    if num is not None:
+        col_vals['numbers1'] = num
+
     if order.get('phone'):
-        col_vals['phone8'] = {'phone': order['phone'], 'countryShortName': 'RO'}
-    address_parts = []
-    if order.get('address'):
-        address_parts.append(order['address'])
+        col_vals['phone8'] = {'phone': str(order['phone']), 'countryShortName': 'RO'}
+
     col_vals['location'] = {
         'address': order.get('address', ''),
         'city': order.get('city', ''),
         'country': order.get('country', 'Romania')
     }
-    if order.get('total') is not None:
-        col_vals['t_mobil9'] = order['total']
-    if order.get('card_amount') is not None:
-        col_vals['incasat'] = order['card_amount']
 
-    col_vals_json = json.dumps(col_vals).replace('"', '\\"')
-    customer = order.get('customer_name', 'New Order')
+    if order.get('total') is not None:
+        try:
+            col_vals['t_mobil9'] = float(order['total'])
+        except (ValueError, TypeError):
+            pass
+
+    if order.get('card_amount') is not None:
+        try:
+            col_vals['incasat'] = float(order['card_amount'])
+        except (ValueError, TypeError):
+            pass
+
+    col_vals_json = json.dumps(col_vals).replace('"', '\\\"')
+    customer = str(order.get('customer_name', 'New Order')).replace('"', '').replace("'", '')
+    order_label = str(order.get('order_number', '')).replace('"', '')
+
+    # Include order ID in item name for traceability
+    item_name = customer if not order_label else f"{customer} #{order_label}"
+    item_name = item_name[:255]  # Monday limit
+
     query = '''mutation {
       create_item(
         board_id: ''' + str(BOARD_ID) + ''',
         group_id: "''' + GROUP_ID + '''",
-        item_name: "''' + customer.replace('"', '') + '''",
+        item_name: "''' + item_name.replace('\\', '') + '''",
         column_values: "''' + col_vals_json + '''"
       ) { id }
     }'''
 
-    headers = {'Authorization': MONDAY_API_KEY, 'Content-Type': 'application/json', 'API-Version': '2023-10'}
+    headers = {
+        'Authorization': MONDAY_API_KEY,
+        'Content-Type': 'application/json',
+        'API-Version': '2023-10'
+    }
     resp = requests.post(MONDAY_API_URL, json={'query': query}, headers=headers, timeout=15)
     resp.raise_for_status()
     data = resp.json()
@@ -60,9 +90,11 @@ def add_product_checklist_update(item_id, order):
         name = p.get('name', 'Produs')
         qty = p.get('quantity', 1)
         lines.append(f'- [ ] {name} x{qty}')
-    body = '\n'.join(lines)
+    if len(lines) == 1:
+        lines.append('- [ ] (produse necunoscute)')
+    body = '\\n'.join(lines)
     query = '''mutation {
-      create_update(item_id: ''' + str(item_id) + ''', body: "''' + body.replace('"', '\\"') + '''") { id }
+      create_update(item_id: ''' + str(item_id) + ''', body: "''' + body.replace('"', '\\\"') + '''") { id }
     }'''
     headers = {'Authorization': MONDAY_API_KEY, 'Content-Type': 'application/json', 'API-Version': '2023-10'}
     resp = requests.post(MONDAY_API_URL, json={'query': query}, headers=headers, timeout=15)
@@ -81,41 +113,68 @@ def add_order_details_update(item_id, order):
         lines.append(f"Plata card: {order['card_amount']} RON")
     if order.get('notes'):
         lines.append(f"Note: {order['notes']}")
-    body = '\n'.join(lines)
+    body = '\\n'.join(lines)
     query = '''mutation {
-      create_update(item_id: ''' + str(item_id) + ''', body: "''' + body.replace('"', '\\"') + '''") { id }
+      create_update(item_id: ''' + str(item_id) + ''', body: "''' + body.replace('"', '\\\"') + '''") { id }
     }'''
     headers = {'Authorization': MONDAY_API_KEY, 'Content-Type': 'application/json', 'API-Version': '2023-10'}
     resp = requests.post(MONDAY_API_URL, json={'query': query}, headers=headers, timeout=15)
     resp.raise_for_status()
 
 
-def parse_wix_ecommerce_order(payload):
-    order_data = payload.get('data', payload)
+def extract_order_number(order_data):
+    """Try every possible field name for a numeric order number."""
+    for key in ['number', 'orderNumber', 'order_number', 'sequenceNumber', 'num']:
+        val = order_data.get(key)
+        n = to_int(val)
+        if n is not None:
+            return n
+    # Fall back to string ID (UUID) so we can still show it in the name
+    for key in ['id', '_id', 'orderId', 'order_id']:
+        val = order_data.get(key)
+        if val:
+            return str(val)
+    return None
+
+
+def parse_wix_ecommerce_order(order_data):
     billing = order_data.get('billingInfo', {})
     contact = billing.get('contactDetails', {})
     address_obj = billing.get('address', {})
+
     pricing = order_data.get('priceSummary', {})
-    total_str = pricing.get('total', {}).get('amount', '0')
+    total_str = pricing.get('total', {})
+    if isinstance(total_str, dict):
+        total_str = total_str.get('amount', '0')
     try:
         total = float(total_str)
     except Exception:
         total = 0.0
-    payments = order_data.get('paymentStatus', '')
-    card_amount = total if 'PAID' in str(payments).upper() else None
-    phone = contact.get('phone', '')
+
+    payment_status = str(order_data.get('paymentStatus', ''))
+    card_amount = total if 'PAID' in payment_status.upper() else None
+
+    phone = contact.get('phone', billing.get('phone', ''))
     street = address_obj.get('addressLine', address_obj.get('streetAddress', {}).get('name', ''))
     city = address_obj.get('city', '')
     country = address_obj.get('country', 'Romania')
+
     products = []
     for line in order_data.get('lineItems', []):
-        products.append({
-            'name': line.get('productName', {}).get('original', line.get('name', 'Produs')),
-            'quantity': line.get('quantity', 1)
-        })
+        pname = line.get('productName', {})
+        if isinstance(pname, dict):
+            pname = pname.get('original', pname.get('translated', 'Produs'))
+        else:
+            pname = str(pname) if pname else line.get('name', 'Produs')
+        products.append({'name': pname, 'quantity': line.get('quantity', 1)})
+
+    first = contact.get('firstName', billing.get('firstName', ''))
+    last = contact.get('lastName', billing.get('lastName', ''))
+    customer_name = f"{first} {last}".strip() or 'Client'
+
     return {
-        'order_number': order_data.get('number', order_data.get('id', '')),
-        'customer_name': f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or 'Client',
+        'order_number': extract_order_number(order_data),
+        'customer_name': customer_name,
         'phone': phone,
         'address': street,
         'city': city,
@@ -127,8 +186,7 @@ def parse_wix_ecommerce_order(payload):
     }
 
 
-def parse_wix_stores_order(payload):
-    order_data = payload.get('order', payload.get('data', payload))
+def parse_wix_stores_order(order_data):
     billing = order_data.get('billingInfo', {})
     address_obj = billing.get('address', {})
     totals = order_data.get('totals', {})
@@ -136,7 +194,7 @@ def parse_wix_stores_order(payload):
         total = float(totals.get('total', 0))
     except Exception:
         total = 0.0
-    payment_method = order_data.get('paymentMethod', '')
+    payment_method = str(order_data.get('paymentMethod', ''))
     card_amount = total if payment_method.upper() in ['CREDIT_CARD', 'CARD', 'STRIPE', 'PAYPAL'] else None
     phone = billing.get('phone', address_obj.get('phone', ''))
     street = address_obj.get('addressLine', '')
@@ -146,8 +204,8 @@ def parse_wix_stores_order(payload):
     for line in order_data.get('lineItems', []):
         products.append({'name': line.get('name', 'Produs'), 'quantity': line.get('quantity', 1)})
     return {
-        'order_number': order_data.get('number', ''),
-        'customer_name': billing.get('firstName', '') + ' ' + billing.get('lastName', ''),
+        'order_number': extract_order_number(order_data),
+        'customer_name': (billing.get('firstName', '') + ' ' + billing.get('lastName', '')).strip() or 'Client',
         'phone': phone,
         'address': street,
         'city': city,
@@ -159,17 +217,16 @@ def parse_wix_stores_order(payload):
     }
 
 
-def auto_parse(payload):
-    # Try to detect payload type and decode if base64
+def unwrap_payload(payload):
+    """Unwrap Wix automation wrapper layers and base64 encoding."""
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
         except Exception:
             try:
-                payload = json.loads(base64.b64decode(payload).decode('utf-8'))
+                payload = json.loads(base64.b64decode(payload + '==').decode('utf-8'))
             except Exception:
                 pass
-    # Handle Wix automation wrapper with data field
     if isinstance(payload, dict) and 'data' in payload:
         inner = payload['data']
         if isinstance(inner, str):
@@ -177,19 +234,29 @@ def auto_parse(payload):
                 inner = json.loads(inner)
             except Exception:
                 try:
-                    inner = json.loads(base64.b64decode(inner).decode('utf-8'))
+                    inner = json.loads(base64.b64decode(inner + '==').decode('utf-8'))
                 except Exception:
                     pass
         if isinstance(inner, dict):
             payload = inner
-    # Detect ecommerce vs stores format
-    if 'priceSummary' in payload or 'lineItems' in payload:
-        return parse_wix_ecommerce_order(payload)
-    elif 'totals' in payload or ('order' in payload and isinstance(payload.get('order'), dict)):
-        return parse_wix_stores_order(payload)
+    return payload
+
+
+def auto_parse(payload):
+    order_data = unwrap_payload(payload)
+    logger.info(f'Order data keys: {list(order_data.keys()) if isinstance(order_data, dict) else type(order_data)}')
+    if not isinstance(order_data, dict):
+        raise ValueError(f'Could not parse payload into dict, got: {type(order_data)}')
+    # Detect format
+    if 'priceSummary' in order_data or 'lineItems' in order_data or 'billingInfo' in order_data:
+        return parse_wix_ecommerce_order(order_data)
+    elif 'totals' in order_data or ('order' in order_data and isinstance(order_data.get('order'), dict)):
+        if 'order' in order_data:
+            return parse_wix_stores_order(order_data['order'])
+        return parse_wix_stores_order(order_data)
     else:
-        # Try ecommerce first as fallback
-        return parse_wix_ecommerce_order(payload)
+        logger.warning('Unknown payload format, attempting ecommerce parse')
+        return parse_wix_ecommerce_order(order_data)
 
 
 @app.route('/health', methods=['GET'])
@@ -202,6 +269,8 @@ def wix_order_webhook():
     try:
         raw = request.get_data(as_text=True)
         logger.info(f'Received webhook, content-type: {request.content_type}, body length: {len(raw)}')
+        # Log first 500 chars of payload for debugging
+        logger.info(f'Payload preview: {raw[:500]}')
         try:
             payload = request.get_json(force=True, silent=True)
             if payload is None:
@@ -210,7 +279,7 @@ def wix_order_webhook():
             payload = {}
         logger.info(f'Parsed payload keys: {list(payload.keys()) if isinstance(payload, dict) else type(payload)}')
         order = auto_parse(payload)
-        logger.info(f'Order parsed: {order.get("customer_name")} #{order.get("order_number")}')
+        logger.info(f'Order parsed: {order.get("customer_name")} #{order.get("order_number")} total={order.get("total")}')
         item_id = create_monday_item(order)
         logger.info(f'Created Monday item: {item_id}')
         add_product_checklist_update(item_id, order)
