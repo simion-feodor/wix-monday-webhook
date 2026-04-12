@@ -189,9 +189,16 @@ def parse_wix_ecommerce_order(order_data):
     logger.info(f'Final total: {total}')
 
     payment_status = str(order_data.get('paymentStatus', ''))
-    # Also check if any payment exists (Wix sometimes uses payments list instead of paymentStatus)
-    has_payment = bool(order_data.get('payments', []))
-    card_amount = total if ('PAID' in payment_status.upper() or has_payment) and total > 0 else None
+    # Card only if payment has regularPaymentDetails (online/card), not offlinePaymentDetails (cash/COD)
+    card_amount = None
+    for pmt in order_data.get('payments', []):
+        logger.info(f'Payment keys: {list(pmt.keys())}')
+        if 'regularPaymentDetails' in pmt and total > 0:
+            card_amount = total
+            break
+        elif 'offlinePaymentDetails' in pmt:
+            logger.info('Cash/offline payment detected, not setting card_amount')
+            break
 
     # Phone: check contactDetails, then top-level contact, then billingInfo
     top_contact = order_data.get('contact', {})
@@ -209,11 +216,20 @@ def parse_wix_ecommerce_order(order_data):
 
     products = []
     for line in order_data.get('lineItems', []):
-        pname = line.get('productName', {})
-        if isinstance(pname, dict):
-            pname = pname.get('original', pname.get('translated', 'Produs'))
-        else:
-            pname = str(pname) if pname else line.get('name', 'Produs')
+        logger.info(f'LineItem keys: {list(line.keys())}')
+        logger.info(f'LineItem sample: {str(line)[:300]}')
+        # Try all known Wix product name fields
+        pname = None
+        pname_field = line.get('productName')
+        if isinstance(pname_field, dict):
+            pname = pname_field.get('original') or pname_field.get('translated')
+        elif isinstance(pname_field, str) and pname_field:
+            pname = pname_field
+        if not pname:
+            pname = (line.get('name') or
+                     line.get('title') or
+                     line.get('catalogReference', {}).get('catalogItemName') or
+                     'Produs')
         # Try to get unit price
         price_obj = line.get('price', line.get('priceData', {}))
         if isinstance(price_obj, dict):
