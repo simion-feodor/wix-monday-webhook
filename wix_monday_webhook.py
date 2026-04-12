@@ -28,30 +28,35 @@ def to_int(val):
 def create_monday_item(order):
     col_vals = {}
 
-    # CMD (numbers1) â text column (changed from numbers)
+    # CMD (text_mm2bgzbx) â text column for order number
     order_num = order.get('order_number')
     if order_num is not None:
-        col_vals['numbers1'] = str(order_num)
+        col_vals['text_mm2bgzbx'] = str(order_num)
 
     if order.get('phone'):
         col_vals['phone8'] = {'phone': str(order['phone']), 'countryShortName': 'RO'}
 
-    # Location (HARTA) â Monday requires address + lat/lng coordinates
+    # ADRESA â plain text column with full delivery address
     addr_parts = [p for p in [
         order.get('address', ''),
         order.get('city', ''),
         order.get('country', '')
     ] if p]
-    full_address = ', '.join(addr_parts) if addr_parts else 'Romania'
+    full_address = ', '.join(addr_parts) if addr_parts else ''
+    if full_address:
+        col_vals['adress'] = full_address
+
+    # HARTA â location column requires lat/lng + address
     col_vals['location'] = {
         'lat': '45.9432',
         'lng': '24.9668',
-        'address': full_address
+        'address': full_address if full_address else 'Romania'
     }
 
-    if order.get('total') is not None:
+    total = order.get('total')
+    if total is not None and total != 0.0:
         try:
-            col_vals['t_mobil9'] = float(order['total'])
+            col_vals['t_mobil9'] = float(total)
         except (ValueError, TypeError):
             pass
 
@@ -62,12 +67,9 @@ def create_monday_item(order):
             pass
 
     col_vals_json = json.dumps(col_vals).replace('"', '\\\"')
+    # Item name = customer name only (order number goes in CMD column)
     customer = str(order.get('customer_name', 'New Order')).replace('"', '').replace("'", '')
-    order_label = str(order.get('order_number', '')).replace('"', '')
-
-    # Include order ID in item name for traceability
-    item_name = customer if not order_label else f"{customer} #{order_label}"
-    item_name = item_name[:255]  # Monday limit
+    item_name = customer[:255]
 
     query = '''mutation {
       create_item(
@@ -91,35 +93,35 @@ def create_monday_item(order):
     return data['data']['create_item']['id']
 
 
-def add_product_checklist_update(item_id, order):
-    lines = ['**Produse comandate:**']
+def add_order_summary_update(item_id, order):
+    """Single update with full order summary in a clean readable format."""
+    lines = []
+    lines.append(f"Comanda #{order.get('order_number', 'N/A')}")
+    lines.append('')
+    lines.append('Produse:')
     for p in order.get('products', []):
         name = p.get('name', 'Produs')
         qty = p.get('quantity', 1)
-        lines.append(f'- [ ] {name} x{qty}')
-    if len(lines) == 1:
-        lines.append('- [ ] (produse necunoscute)')
-    body = '\\n'.join(lines)
-    query = '''mutation {
-      create_update(item_id: ''' + str(item_id) + ''', body: "''' + body.replace('"', '\\\"') + '''") { id }
-    }'''
-    headers = {'Authorization': MONDAY_API_KEY, 'Content-Type': 'application/json', 'API-Version': '2023-10'}
-    resp = requests.post(MONDAY_API_URL, json={'query': query}, headers=headers, timeout=15)
-    resp.raise_for_status()
-
-
-def add_order_details_update(item_id, order):
-    lines = [
-        f"**Comanda #{order.get('order_number', 'N/A')}**",
-        f"Client: {order.get('customer_name', 'N/A')}",
-        f"Telefon: {order.get('phone', 'N/A')}",
-        f"Adresa: {order.get('address', 'N/A')}, {order.get('city', '')}",
-        f"Total: {order.get('total', 'N/A')} RON",
-    ]
+        price = p.get('price', '')
+        if price:
+            lines.append(f"{name} | Cantitate: {qty} | Pret: {price} RON")
+        else:
+            lines.append(f"{name} | Cantitate: {qty}")
+    if not order.get('products'):
+        lines.append('(produse necunoscute)')
+    lines.append('')
+    total = order.get('total', 'N/A')
+    lines.append(f"Total: {total} RON")
     if order.get('card_amount') is not None:
         lines.append(f"Plata card: {order['card_amount']} RON")
+    lines.append('')
+    lines.append('Date client:')
+    lines.append(f"Nume: {order.get('customer_name', 'N/A')}")
+    lines.append(f"Telefon: {order.get('phone', 'N/A')}")
+    addr_parts = [p for p in [order.get('address', ''), order.get('city', ''), order.get('country', '')] if p]
+    lines.append(f"Adresa: {', '.join(addr_parts) if addr_parts else 'N/A'}")
     if order.get('notes'):
-        lines.append(f"Note: {order['notes']}")
+        lines.append(f"Nota cumparator: {order['notes']}")
     body = '\\n'.join(lines)
     query = '''mutation {
       create_update(item_id: ''' + str(item_id) + ''', body: "''' + body.replace('"', '\\\"') + '''") { id }
@@ -130,7 +132,7 @@ def add_order_details_update(item_id, order):
 
 
 def extract_order_number(order_data):
-    """Try every possible field name for a numeric order number."""
+    """Try every possible field name for a numeric order_number."""
     for key in ['number', 'orderNumber', 'order_number', 'sequenceNumber', 'num']:
         val = order_data.get(key)
         n = to_int(val)
@@ -162,10 +164,41 @@ def parse_wix_ecommerce_order(order_data):
     except Exception:
         total = 0.0
 
-    payment_status = str(order_data.get('paymentStatus', ''))
-    card_amount = total if 'PAID' in payment_status.upper() else None
+    logger.info(f'priceSummary total parsed: {total}')
+    # Fallback: get total from payments array if priceSummary gave 0
+    if total == 0.0:
+        for pmt in order_data.get('payments', []):
+            try:
+                amt = pmt.get('amount', {})
+                val = amt.get('value', 0) if isinstance(amt, dict) else amt
+                logger.info(f'Payment amount found: {val}')
+                total = float(val)
+                if total:
+                    break
+            except Exception:
+                pass
+    # Fallback: try subtotal from priceSummary
+    if total == 0.0:
+        sub = pricing.get('subtotal', {})
+        if isinstance(sub, dict):
+            sub = sub.get('amount', '0')
+        try:
+            total = float(sub)
+        except Exception:
+            pass
+    logger.info(f'Final total: {total}')
 
-    phone = contact.get('phone', billing.get('phone', ''))
+    payment_status = str(order_data.get('paymentStatus', ''))
+    # Also check if any payment exists (Wix sometimes uses payments list instead of paymentStatus)
+    has_payment = bool(order_data.get('payments', []))
+    card_amount = total if ('PAID' in payment_status.upper() or has_payment) and total > 0 else None
+
+    # Phone: check contactDetails, then top-level contact, then billingInfo
+    top_contact = order_data.get('contact', {})
+    phone = (contact.get('phone') or
+             top_contact.get('phone') or
+             top_contact.get('contactDetails', {}).get('phone') or
+             billing.get('phone') or '')
 
     # Try billing address first, fall back to shipping address
     street = (address_obj.get('addressLine') or
@@ -181,7 +214,17 @@ def parse_wix_ecommerce_order(order_data):
             pname = pname.get('original', pname.get('translated', 'Produs'))
         else:
             pname = str(pname) if pname else line.get('name', 'Produs')
-        products.append({'name': pname, 'quantity': line.get('quantity', 1)})
+        # Try to get unit price
+        price_obj = line.get('price', line.get('priceData', {}))
+        if isinstance(price_obj, dict):
+            price_val = price_obj.get('amount', price_obj.get('price', ''))
+        else:
+            price_val = str(price_obj) if price_obj else ''
+        try:
+            price_val = str(round(float(price_val), 2)) if price_val else ''
+        except Exception:
+            price_val = ''
+        products.append({'name': pname, 'quantity': line.get('quantity', 1), 'price': price_val})
 
     first = contact.get('firstName', billing.get('firstName', ''))
     last = contact.get('lastName', billing.get('lastName', ''))
@@ -217,7 +260,8 @@ def parse_wix_stores_order(order_data):
     country = address_obj.get('country', 'Romania')
     products = []
     for line in order_data.get('lineItems', []):
-        products.append({'name': line.get('name', 'Produs'), 'quantity': line.get('quantity', 1)})
+        price_val = str(line.get('price', ''))
+        products.append({'name': line.get('name', 'Produs'), 'quantity': line.get('quantity', 1), 'price': price_val})
     return {
         'order_number': extract_order_number(order_data),
         'customer_name': (billing.get('firstName', '') + ' ' + billing.get('lastName', '')).strip() or 'Client',
@@ -296,9 +340,8 @@ def wix_order_webhook():
         logger.info(f'Order parsed: {order.get("customer_name")} #{order.get("order_number")} total={order.get("total")}')
         item_id = create_monday_item(order)
         logger.info(f'Created Monday item: {item_id}')
-        add_product_checklist_update(item_id, order)
-        add_order_details_update(item_id, order)
-        logger.info(f'Updates added to item {item_id}')
+        add_order_summary_update(item_id, order)
+        logger.info(f'Update added to item {item_id}')
         return jsonify({'status': 'ok', 'item_id': item_id}), 200
     except Exception as e:
         logger.error(f'Error processing webhook: {e}', exc_info=True)
