@@ -28,19 +28,22 @@ def to_int(val):
 def create_monday_item(order):
     col_vals = {}
 
-    # CMD (numbers1) — must be integer
-    num = to_int(order.get('order_number'))
-    if num is not None:
-        col_vals['numbers1'] = num
+    # CMD (numbers1) â text column (changed from numbers)
+    order_num = order.get('order_number')
+    if order_num is not None:
+        col_vals['numbers1'] = str(order_num)
 
     if order.get('phone'):
         col_vals['phone8'] = {'phone': str(order['phone']), 'countryShortName': 'RO'}
 
-    col_vals['location'] = {
-        'address': order.get('address', ''),
-        'city': order.get('city', ''),
-        'country': order.get('country', 'Romania')
-    }
+    # Location (HARTA) â Monday only accepts {"address": "..."} format
+    addr_parts = [p for p in [
+        order.get('address', ''),
+        order.get('city', ''),
+        order.get('country', '')
+    ] if p]
+    full_address = ', '.join(addr_parts) if addr_parts else 'Romania'
+    col_vals['location'] = {'address': full_address}
 
     if order.get('total') is not None:
         try:
@@ -142,6 +145,10 @@ def parse_wix_ecommerce_order(order_data):
     contact = billing.get('contactDetails', {})
     address_obj = billing.get('address', {})
 
+    # Also check shippingInfo for address
+    shipping = order_data.get('shippingInfo', {})
+    shipping_addr = shipping.get('shipmentDetails', {}).get('address', {})
+
     pricing = order_data.get('priceSummary', {})
     total_str = pricing.get('total', {})
     if isinstance(total_str, dict):
@@ -155,9 +162,13 @@ def parse_wix_ecommerce_order(order_data):
     card_amount = total if 'PAID' in payment_status.upper() else None
 
     phone = contact.get('phone', billing.get('phone', ''))
-    street = address_obj.get('addressLine', address_obj.get('streetAddress', {}).get('name', ''))
-    city = address_obj.get('city', '')
-    country = address_obj.get('country', 'Romania')
+
+    # Try billing address first, fall back to shipping address
+    street = (address_obj.get('addressLine') or
+              address_obj.get('streetAddress', {}).get('name', '') or
+              shipping_addr.get('addressLine', ''))
+    city = address_obj.get('city', '') or shipping_addr.get('city', '')
+    country = address_obj.get('country', '') or shipping_addr.get('country', 'Romania') or 'Romania'
 
     products = []
     for line in order_data.get('lineItems', []):
@@ -269,7 +280,6 @@ def wix_order_webhook():
     try:
         raw = request.get_data(as_text=True)
         logger.info(f'Received webhook, content-type: {request.content_type}, body length: {len(raw)}')
-        # Log first 500 chars of payload for debugging
         logger.info(f'Payload preview: {raw[:500]}')
         try:
             payload = request.get_json(force=True, silent=True)
