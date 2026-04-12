@@ -132,7 +132,7 @@ def add_order_summary_update(item_id, order):
 
 
 def extract_order_number(order_data):
-    """Try every possible field name for a numeric order_number."""
+    """Try every possible field name for a numeric order number."""
     for key in ['number', 'orderNumber', 'order_number', 'sequenceNumber', 'num']:
         val = order_data.get(key)
         n = to_int(val)
@@ -192,12 +192,9 @@ def parse_wix_ecommerce_order(order_data):
     # Card only if payment has regularPaymentDetails (online/card), not offlinePaymentDetails (cash/COD)
     card_amount = None
     for pmt in order_data.get('payments', []):
-        logger.info(f'Payment keys: {list(pmt.keys())}')
-        if 'regularPaymentDetails' in pmt and total > 0:
+        # Card payment: Wix includes 'creditCardLastDigits' for card transactions
+        if pmt.get('creditCardLastDigits') and total > 0:
             card_amount = total
-            break
-        elif 'offlinePaymentDetails' in pmt:
-            logger.info('Cash/offline payment detected, not setting card_amount')
             break
 
     # Phone: check contactDetails, then top-level contact, then billingInfo
@@ -216,24 +213,18 @@ def parse_wix_ecommerce_order(order_data):
 
     products = []
     for line in order_data.get('lineItems', []):
-        logger.info(f'LineItem keys: {list(line.keys())}')
-        logger.info(f'LineItem sample: {str(line)[:300]}')
-        # Try all known Wix product name fields
-        pname = None
-        pname_field = line.get('productName')
-        if isinstance(pname_field, dict):
-            pname = pname_field.get('original') or pname_field.get('translated')
-        elif isinstance(pname_field, str) and pname_field:
-            pname = pname_field
-        if not pname:
-            pname = (line.get('name') or
-                     line.get('title') or
-                     line.get('catalogReference', {}).get('catalogItemName') or
-                     'Produs')
-        # Try to get unit price
-        price_obj = line.get('price', line.get('priceData', {}))
+        # Product name: Wix uses 'itemName' field
+        pname = (line.get('itemName') or
+                 line.get('name') or
+                 line.get('productName') or
+                 line.get('title') or
+                 'Produs')
+        if isinstance(pname, dict):
+            pname = pname.get('original') or pname.get('translated') or 'Produs'
+        # Price: Wix uses 'totalPrice.value'
+        price_obj = line.get('totalPrice', line.get('price', line.get('priceData', {})))
         if isinstance(price_obj, dict):
-            price_val = price_obj.get('amount', price_obj.get('price', ''))
+            price_val = price_obj.get('value', price_obj.get('amount', ''))
         else:
             price_val = str(price_obj) if price_obj else ''
         try:
