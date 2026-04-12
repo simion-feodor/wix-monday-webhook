@@ -385,10 +385,10 @@ def wix_order_webhook():
         logger.info(f'Order parsed: {order.get("customer_name")} #{order.get("order_number")} total={order.get("total")}')
         item_id = create_monday_item(order)
         logger.info(f'Created Monday item: {item_id}')
-        add_order_summary_update(item_id, order)
-        logger.info(f'Summary update added to item {item_id}')
         add_raw_order_update(item_id, order_data)
         logger.info(f'Raw data update added to item {item_id}')
+        add_order_summary_update(item_id, order)
+        logger.info(f'Summary update added to item {item_id}')
         return jsonify({'status': 'ok', 'item_id': item_id}), 200
     except Exception as e:
         logger.error(f'Error processing webhook: {e}', exc_info=True)
