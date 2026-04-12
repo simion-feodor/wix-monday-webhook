@@ -36,14 +36,18 @@ def create_monday_item(order):
     if order.get('phone'):
         col_vals['phone8'] = {'phone': str(order['phone']), 'countryShortName': 'RO'}
 
-    # Location (HARTA) â Monday only accepts {"address": "..."} format
+    # Location (HARTA) â Monday requires address + lat/lng coordinates
     addr_parts = [p for p in [
         order.get('address', ''),
         order.get('city', ''),
         order.get('country', '')
     ] if p]
     full_address = ', '.join(addr_parts) if addr_parts else 'Romania'
-    col_vals['location'] = {'address': full_address}
+    col_vals['location'] = {
+        'lat': '45.9432',
+        'lng': '24.9668',
+        'address': full_address
+    }
 
     if order.get('total') is not None:
         try:
