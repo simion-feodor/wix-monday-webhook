@@ -148,6 +148,9 @@ def add_order_summary_update(item_id, order):
     else:
         lines.append("Plata: Cash (ramburs)")
     lines.append('')
+    if order.get('delivery_time'):
+        lines.append(f"Livrare: {order['delivery_time']}")
+    lines.append('')
     lines.append('Date client:')
     lines.append(f"  Nume: {order.get('customer_name', 'N/A')}")
     lines.append(f"  Telefon: {order.get('phone', 'N/A')}")
@@ -163,15 +166,102 @@ def add_order_summary_update(item_id, order):
 
 
 def add_raw_order_update(item_id, order_data):
-    """Second update: full raw Wix order data for complete reference."""
+    """Second update: key input fields from the Wix order payload."""
     try:
-        raw_text = json.dumps(order_data, indent=2, ensure_ascii=False)
-        # Monday.com updates support up to ~15k chars
-        if len(raw_text) > 12000:
-            raw_text = raw_text[:12000] + '\n... [truncated]'
-        body = 'DATE COMPLETE COMANDA (Wix raw):\n\n' + raw_text
+        def pick(d, *keys):
+            """Safely get a nested value."""
+            for k in keys:
+                if not isinstance(d, dict):
+                    return None
+                d = d.get(k)
+            return d
+
+        lines = []
+        lines.append('DATE INTRARE COMANDA (Wix):')
+        lines.append('')
+
+        # Order identifiers
+        lines.append(f"ID comanda: {order_data.get('id', 'N/A')}")
+        lines.append(f"Numar comanda: {order_data.get('number', order_data.get('orderNumber', 'N/A'))}")
+        lines.append(f"Status: {order_data.get('status', order_data.get('fulfillmentStatus', 'N/A'))}")
+        lines.append(f"Status plata: {order_data.get('paymentStatus', 'N/A')}")
+        lines.append('')
+
+        # Buyer info
+        buyer = order_data.get('buyerInfo', {})
+        billing = order_data.get('billingInfo', {})
+        contact = billing.get('contactDetails', {}) if isinstance(billing, dict) else {}
+        lines.append('Cumparator:')
+        lines.append(f"  Email: {buyer.get('email', '') or billing.get('email', '') or pick(order_data, 'contact', 'email') or 'N/A'}")
+        lines.append(f"  Telefon: {contact.get('phone', '') or buyer.get('phone', '') or billing.get('phone', '') or 'N/A'}")
+        lines.append(f"  Nume: {contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or 'N/A')
+        lines.append('')
+
+        # Shipping address
+        shipping = order_data.get('shippingInfo', {})
+        shipment = shipping.get('shipmentDetails', {}) if isinstance(shipping, dict) else {}
+        ship_addr = shipment.get('address', {}) if isinstance(shipment, dict) else {}
+        bill_addr = billing.get('address', {}) if isinstance(billing, dict) else {}
+        addr = ship_addr or bill_addr
+        lines.append('Adresa livrare:')
+        lines.append(f"  Strada: {addr.get('addressLine', addr.get('streetAddress', {}).get('name', 'N/A'))}")
+        lines.append(f"  Oras: {addr.get('city', 'N/A')}")
+        lines.append(f"  Tara: {addr.get('country', 'N/A')}")
+        lines.append('')
+
+        # Delivery time
+        logistics = shipping.get('logistics', {}) if isinstance(shipping, dict) else {}
+        delivery_time = (order_data.get('deliveryTime') or
+                         logistics.get('deliveryTime') or
+                         shipping.get('deliveryTime') or '')
+        if delivery_time:
+            lines.append(f"Interval livrare: {delivery_time}")
+            lines.append('')
+
+        # Buyer note
+        buyer_note = (order_data.get('buyerNote') or
+                      (buyer.get('message') if isinstance(buyer, dict) else None) or
+                      order_data.get('note') or '')
+        if buyer_note:
+            lines.append(f"Nota cumparator: {buyer_note}")
+            lines.append('')
+
+        # Products
+        lines.append('Produse:')
+        for item in order_data.get('lineItems', []):
+            name = (item.get('itemName') or item.get('name') or item.get('productName') or 'Produs')
+            if isinstance(name, dict):
+                name = name.get('original') or name.get('translated') or 'Produs'
+            qty = item.get('quantity', 1)
+            price_obj = item.get('totalPrice', item.get('price', {}))
+            price = price_obj.get('value', price_obj.get('amount', '')) if isinstance(price_obj, dict) else str(price_obj or '')
+            lines.append(f"  {name} | qty: {qty} | pret: {price} RON")
+        lines.append('')
+
+        # Totals
+        pricing = order_data.get('priceSummary', {})
+        lines.append('Sumar preturi:')
+        for key, label in [('subtotal', 'Subtotal'), ('shipping', 'Transport'), ('discount', 'Discount'), ('total', 'Total')]:
+            val = pricing.get(key, {})
+            if isinstance(val, dict):
+                val = val.get('amount', val.get('value', ''))
+            if val:
+                lines.append(f"  {label}: {val} RON")
+        lines.append('')
+
+        # Payments
+        lines.append('Plata:')
+        for pmt in order_data.get('payments', []):
+            method = pmt.get('paymentMethod', pmt.get('type', 'N/A'))
+            amt = pmt.get('amount', {})
+            amt_val = amt.get('value', amt.get('amount', '')) if isinstance(amt, dict) else str(amt or '')
+            cc = pmt.get('creditCardLastDigits', '')
+            cc_info = f" (card ...{cc})" if cc else ''
+            lines.append(f"  {method}{cc_info}: {amt_val} RON")
+
+        body = '\n'.join(lines)
     except Exception as e:
-        body = f'Eroare la serializarea datelor: {e}'
+        body = f'Eroare la construirea rezumatului: {e}'
 
     query = 'mutation ($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }'
     _post_monday(query, {'itemId': str(item_id), 'body': body})
@@ -275,6 +365,23 @@ def parse_wix_ecommerce_order(order_data):
     last = contact.get('lastName', billing.get('lastName', ''))
     customer_name = f"{first} {last}".strip() or 'Client'
 
+    # Buyer note â check multiple possible field names
+    buyer_info = order_data.get('buyerInfo', {})
+    notes = (order_data.get('buyerNote') or
+             (buyer_info.get('message') if isinstance(buyer_info, dict) else None) or
+             order_data.get('note') or
+             order_data.get('customerNote') or '')
+    logger.info(f'Buyer note found: {repr(notes)}')
+
+    # Delivery time â check shippingInfo.logistics and root level
+    logistics = shipping.get('logistics', {})
+    delivery_time = (order_data.get('deliveryTime') or
+                     logistics.get('deliveryTime') or
+                     shipping.get('deliveryTime') or
+                     logistics.get('instructions') or
+                     '')
+    logger.info(f'Delivery time found: {repr(delivery_time)}')
+
     return {
         'order_number': extract_order_number(order_data),
         'customer_name': customer_name,
@@ -285,7 +392,8 @@ def parse_wix_ecommerce_order(order_data):
         'total': total,
         'card_amount': card_amount,
         'products': products,
-        'notes': order_data.get('buyerNote', '')
+        'notes': notes,
+        'delivery_time': delivery_time,
     }
 
 
@@ -317,7 +425,8 @@ def parse_wix_stores_order(order_data):
         'total': total,
         'card_amount': card_amount,
         'products': products,
-        'notes': order_data.get('buyerNote', '')
+        'notes': order_data.get('buyerNote', '') or order_data.get('note', ''),
+        'delivery_time': order_data.get('deliveryTime', ''),
     }
 
 
