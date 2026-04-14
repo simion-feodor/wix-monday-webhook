@@ -35,13 +35,29 @@ def clean_for_geocoding(address):
 
 
 def geocode_address(address):
-    """Get real lat/lng for an address. Tries Nominatim (full+simplified) then Photon."""
+    """Get real lat/lng for an address. Tries Nominatim then Photon as fallback."""
+    # Try Nominatim with full address
+    try:
+        url = 'https://nominatim.openstreetmap.org/search'
+        params = {'q': address, 'format': 'json', 'limit': 1}
+        headers = {'User-Agent': 'jarinka-delivery/1.0 (jarinka.ro)'}
+        resp = requests.get(url, params=params, headers=headers, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            lat = float(data[0]['lat'])
+            lng = float(data[0]['lon'])
+            logger.info(f'Geocoded (Nominatim) "{address}" -> {lat}, {lng}')
+            return lat, lng
+    except Exception as e:
+        logger.warning(f'Nominatim failed for "{address}": {e}')
+
+    # Try Nominatim with simplified address (strips apt/unit details)
     simplified = clean_for_geocoding(address)
-    # Try Nominatim first (full address, then simplified if different)
-    for q in ([address, simplified] if simplified != address else [address]):
+    if simplified != address:
         try:
             url = 'https://nominatim.openstreetmap.org/search'
-            params = {'q': q, 'format': 'json', 'limit': 1}
+            params = {'q': simplified, 'format': 'json', 'limit': 1}
             headers = {'User-Agent': 'jarinka-delivery/1.0 (jarinka.ro)'}
             resp = requests.get(url, params=params, headers=headers, timeout=8)
             resp.raise_for_status()
@@ -49,15 +65,15 @@ def geocode_address(address):
             if data:
                 lat = float(data[0]['lat'])
                 lng = float(data[0]['lon'])
-                logger.info(f'Geocoded (Nominatim) "{q}" -> {lat}, {lng}')
+                logger.info(f'Geocoded (Nominatim simple) "{simplified}" -> {lat}, {lng}')
                 return lat, lng
         except Exception as e:
-            logger.warning(f'Nominatim failed for "{q}": {e}')
+            logger.warning(f'Nominatim simple failed for "{simplified}": {e}')
 
-    # Try Photon (Komoot) as second option
+    # Try Photon (Komoot) as final option
     try:
         url = 'https://photon.komoot.io/api/'
-        params = {'q': address, 'limit': 1}
+        params = {'q': simplified, 'limit': 1}
         resp = requests.get(url, params=params, timeout=8)
         resp.raise_for_status()
         features = resp.json().get('features', [])
@@ -65,15 +81,13 @@ def geocode_address(address):
             coords = features[0]['geometry']['coordinates']
             lng = float(coords[0])
             lat = float(coords[1])
-            logger.info(f'Geocoded (Photon) "{address}" -> {lat}, {lng}')
+            logger.info(f'Geocoded (Photon) "{simplified}" -> {lat}, {lng}')
             return lat, lng
     except Exception as e:
-        logger.warning(f'Photon failed for "{address}": {e}')
+        logger.warning(f'Photon failed for "{simplified}": {e}')
 
     logger.warning(f'All geocoding failed for "{address}", using Brasov center fallback')
     return None, None
-
-
 def _post_monday(query, variables=None):
     """Post a GraphQL query/mutation to Monday.com API."""
     headers = {
