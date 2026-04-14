@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64
 import requests
@@ -25,12 +26,22 @@ def to_int(val):
         return None
 
 
+def clean_for_geocoding(address):
+    """Simplify address for geocoders: remove apt/unit details like sc., ap., bl."""
+    cleaned = re.sub(r'\b(sc|ap|bl|et|int|cam)\s*\.?\s*[A-Za-z0-9]+\b', '', address, flags=re.IGNORECASE)
+    cleaned = re.sub(r',\s*,', ',', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip().strip(',').strip()
+    return cleaned
+
+
 def geocode_address(address):
-    """Get real lat/lng for an address. Tries Nominatim then Photon as fallback."""
-    # Try Nominatim first
-    try:
+    """Get real lat/lng for an address. Tries Nominatim (full+simplified) then Photon."""
+    simplified = clean_for_geocoding(address)
+    # Try Nominatim first (full address, then simplified if different)
+    for q in ([address, simplified] if simplified != address else [address]):
+      try:
         url = 'https://nominatim.openstreetmap.org/search'
-        params = {'q': address, 'format': 'json', 'limit': 1}
+        params = {'q': q, 'format': 'json', 'limit': 1}
         headers = {'User-Agent': 'jarinka-delivery/1.0 (jarinka.ro)'}
         resp = requests.get(url, params=params, headers=headers, timeout=8)
         resp.raise_for_status()
@@ -59,8 +70,8 @@ def geocode_address(address):
     except Exception as e:
         logger.warning(f'Photon failed for "{address}": {e}')
 
-    logger.warning(f'All geocoding failed for "{address}", using Romania center fallback')
-    return 45.9432, 24.9668  # fallback: center of Romania (as floats)
+    logger.warning(f'All geocoding failed for "{address}", using Brasov center fallback')
+    return None, None
 
 
 def _post_monday(query, variables=None):
@@ -103,11 +114,14 @@ def create_monday_item(order):
     if full_address:
         lat, lng = geocode_address(full_address)
     else:
-        lat, lng = 45.9432, 24.9668
+        lat, lng = None, None
+    # Fallback to Brasov city center if geocoding fails
+    if lat is None or lng is None:
+        lat, lng = 45.6427, 25.5887
     col_vals['location'] = {
         'lat': lat,
         'lng': lng,
-        'address': full_address if full_address else 'Romania'
+        'address': full_address if full_address else 'Brasov, Romania'
     }
 
     total = order.get('total')
