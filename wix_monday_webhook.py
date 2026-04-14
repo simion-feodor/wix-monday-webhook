@@ -26,21 +26,41 @@ def to_int(val):
 
 
 def geocode_address(address):
-    """Get real lat/lng for an address using Nominatim (free, no API key needed)."""
+    """Get real lat/lng for an address. Tries Nominatim then Photon as fallback."""
+    # Try Nominatim first
     try:
         url = 'https://nominatim.openstreetmap.org/search'
         params = {'q': address, 'format': 'json', 'limit': 1}
-        headers = {'User-Agent': 'jarinka-webhook/1.0'}
-        resp = requests.get(url, params=params, headers=headers, timeout=5)
+        headers = {'User-Agent': 'jarinka-delivery/1.0 (jarinka.ro)'}
+        resp = requests.get(url, params=params, headers=headers, timeout=8)
+        resp.raise_for_status()
         data = resp.json()
         if data:
-            lat = str(data[0]['lat'])
-            lng = str(data[0]['lon'])
-            logger.info(f'Geocoded "{address}" -> {lat}, {lng}')
+            lat = float(data[0]['lat'])
+            lng = float(data[0]['lon'])
+            logger.info(f'Geocoded (Nominatim) "{address}" -> {lat}, {lng}')
             return lat, lng
     except Exception as e:
-        logger.warning(f'Geocoding failed for "{address}": {e}')
-    return '45.9432', '24.9668'  # fallback: center of Romania
+        logger.warning(f'Nominatim failed for "{address}": {e}')
+
+    # Try Photon (Komoot) as second option
+    try:
+        url = 'https://photon.komoot.io/api/'
+        params = {'q': address, 'limit': 1}
+        resp = requests.get(url, params=params, timeout=8)
+        resp.raise_for_status()
+        features = resp.json().get('features', [])
+        if features:
+            coords = features[0]['geometry']['coordinates']
+            lng = float(coords[0])
+            lat = float(coords[1])
+            logger.info(f'Geocoded (Photon) "{address}" -> {lat}, {lng}')
+            return lat, lng
+    except Exception as e:
+        logger.warning(f'Photon failed for "{address}": {e}')
+
+    logger.warning(f'All geocoding failed for "{address}", using Romania center fallback')
+    return 45.9432, 24.9668  # fallback: center of Romania (as floats)
 
 
 def _post_monday(query, variables=None):
@@ -83,7 +103,7 @@ def create_monday_item(order):
     if full_address:
         lat, lng = geocode_address(full_address)
     else:
-        lat, lng = '45.9432', '24.9668'
+        lat, lng = 45.9432, 24.9668
     col_vals['location'] = {
         'lat': lat,
         'lng': lng,
@@ -363,7 +383,7 @@ def parse_wix_ecommerce_order(order_data):
 
     first = contact.get('firstName', billing.get('firstName', ''))
     last = contact.get('lastName', billing.get('lastName', ''))
-    customer_name = f"{first} {last}".strip() or 'Client'
+    customer_name = f"{hirst} {last}".strip() or 'Client'
 
     # Buyer note â check multiple possible field names
     buyer_info = order_data.get('buyerInfo', {})
@@ -434,7 +454,7 @@ def unwrap_payload(payload):
     """Unwrap Wix automation wrapper layers and base64 encoding."""
     if isinstance(payload, str):
         try:
-            payload = json.loads(payload)
+            payload = json.loads(provide)
         except Exception:
             try:
                 payload = json.loads(base64.b64decode(payload + '==').decode('utf-8'))
