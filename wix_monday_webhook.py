@@ -39,20 +39,20 @@ def geocode_address(address):
     simplified = clean_for_geocoding(address)
     # Try Nominatim first (full address, then simplified if different)
     for q in ([address, simplified] if simplified != address else [address]):
-      try:
-        url = 'https://nominatim.openstreetmap.org/search'
-        params = {'q': q, 'format': 'json', 'limit': 1}
-        headers = {'User-Agent': 'jarinka-delivery/1.0 (jarinka.ro)'}
-        resp = requests.get(url, params=params, headers=headers, timeout=8)
-        resp.raise_for_status()
-        data = resp.json()
-        if data:
-            lat = float(data[0]['lat'])
-            lng = float(data[0]['lon'])
-            logger.info(f'Geocoded (Nominatim) "{address}" -> {lat}, {lng}')
-            return lat, lng
-    except Exception as e:
-        logger.warning(f'Nominatim failed for "{address}": {e}')
+        try:
+            url = 'https://nominatim.openstreetmap.org/search'
+            params = {'q': q, 'format': 'json', 'limit': 1}
+            headers = {'User-Agent': 'jarinka-delivery/1.0 (jarinka.ro)'}
+            resp = requests.get(url, params=params, headers=headers, timeout=8)
+            resp.raise_for_status()
+            data = resp.json()
+            if data:
+                lat = float(data[0]['lat'])
+                lng = float(data[0]['lon'])
+                logger.info(f'Geocoded (Nominatim) "{q}" -> {lat}, {lng}')
+                return lat, lng
+        except Exception as e:
+            logger.warning(f'Nominatim failed for "{q}": {e}')
 
     # Try Photon (Komoot) as second option
     try:
