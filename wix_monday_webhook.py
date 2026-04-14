@@ -383,7 +383,7 @@ def parse_wix_ecommerce_order(order_data):
 
     first = contact.get('firstName', billing.get('firstName', ''))
     last = contact.get('lastName', billing.get('lastName', ''))
-    customer_name = f"{hirst} {last}".strip() or 'Client'
+    customer_name = f"{first} {last}".strip() or 'Client'
 
     # Buyer note â check multiple possible field names
     buyer_info = order_data.get('buyerInfo', {})
