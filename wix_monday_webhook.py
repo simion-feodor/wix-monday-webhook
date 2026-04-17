@@ -423,7 +423,7 @@ def parse_wix_ecommerce_order(order_data):
              order_data.get('note') or
              order_data.get('customerNote') or
              checkout_note or '')
-    logger.info(f'Buyer note found: {repr(notes)}')
+    logger.info(f'Buyer note found: {repr(notes)} | checkoutCustomFields raw: {repr(order_data.get("checkoutCustomFields"))}')
 
     # Delivery time â check shippingInfo.logistics and root level
     logistics = shipping.get('logistics', {})
