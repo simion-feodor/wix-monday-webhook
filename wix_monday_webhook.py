@@ -536,6 +536,9 @@ def wix_order_webhook():
         raw = request.get_data(as_text=True)
         logger.info(f'Received webhook, content-type: {request.content_type}, body length: {len(raw)}')
         logger.info(f'Payload preview: {raw[:3000]}')
+        import re as _re
+        _note_keys = _re.findall(r'"(\w*(?:note|buyer|instruction|comment|message)\w*)"\s*:', raw, _re.IGNORECASE)
+        logger.info(f'Note-like keys in payload: {list(set(_note_keys))}')
         try:
             payload = request.get_json(force=True, silent=True)
             if payload is None:
