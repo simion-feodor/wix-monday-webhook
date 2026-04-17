@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 MONDAY_API_KEY = os.environ.get('MONDAY_API_KEY', '')
 MONDAY_API_URL = 'https://api.monday.com/v2'
+WIX_API_KEY = os.environ.get('WIX_API_KEY', '')
+WIX_SITE_ID = '9fcc00dd-2c45-410f-9dca-9360fdb28ac6'
 BOARD_ID = 804109007
 GROUP_ID = 'new_group3802'
 
@@ -25,6 +27,22 @@ def to_int(val):
     except (ValueError, TypeError):
         return None
 
+
+def fetch_wix_buyer_note(order_id):
+    """Fetch buyerNote from Wix eCommerce API — it's not in the webhook payload."""
+    if not WIX_API_KEY or not order_id:
+        return ''
+    try:
+        url = f'https://www.wixapis.com/ecom/v1/orders/{order_id}'
+        headers = {'Authorization': WIX_API_KEY, 'wix-site-id': WIX_SITE_ID}
+        resp = requests.get(url, headers=headers, timeout=8)
+        resp.raise_for_status()
+        note = resp.json().get('order', {}).get('buyerNote', '') or ''
+        logger.info(f'Wix buyerNote fetched: {repr(note)}')
+        return note
+    except Exception as e:
+        logger.warning(f'Failed to fetch Wix buyerNote: {e}')
+        return ''
 
 def clean_for_geocoding(address):
     """Simplify address for geocoders: remove apt/unit details like sc., ap., bl."""
@@ -267,11 +285,9 @@ def add_raw_order_update(item_id, order_data):
             lines.append('')
 
         # Buyer note
-        checkout_note = next((str(f.get('value', '')) for f in (order_data.get('checkoutCustomFields') or []) if isinstance(f, dict) and f.get('value')), '')
         buyer_note = (order_data.get('buyerNote') or
                       (buyer.get('message') if isinstance(buyer, dict) else None) or
-                      order_data.get('note') or
-                      checkout_note or '')
+                      order_data.get('note') or '')
         if buyer_note:
             lines.append(f"Nota cumparator: {buyer_note}")
             lines.append('')
@@ -417,14 +433,11 @@ def parse_wix_ecommerce_order(order_data):
 
     # Buyer note â check multiple possible field names
     buyer_info = order_data.get('buyerInfo', {})
-    checkout_note = next((str(f.get('value', '')) for f in (order_data.get('checkoutCustomFields') or []) if isinstance(f, dict) and f.get('value')), '')
     notes = (order_data.get('buyerNote') or
              (buyer_info.get('message') if isinstance(buyer_info, dict) else None) or
              order_data.get('note') or
-             order_data.get('customerNote') or
-             checkout_note or '')
-    logger.info(f'contact field: {repr(order_data.get("contact"))}')
-    logger.info(f'Buyer note found: {repr(notes)} | checkoutCustomFields raw: {repr(order_data.get("checkoutCustomFields"))}')
+             order_data.get('customerNote') or '')
+    logger.info(f'Buyer note found: {repr(notes)}')
 
     # Delivery time â check shippingInfo.logistics and root level
     logistics = shipping.get('logistics', {})
@@ -535,10 +548,8 @@ def wix_order_webhook():
     try:
         raw = request.get_data(as_text=True)
         logger.info(f'Received webhook, content-type: {request.content_type}, body length: {len(raw)}')
-        logger.info(f'Payload preview: {raw[:3000]}')
-        import re as _re
-        _note_keys = _re.findall(r'"(\w*(?:note|buyer|instruction|comment|message)\w*)"\s*:', raw, _re.IGNORECASE)
-        logger.info(f'Note-like keys in payload: {list(set(_note_keys))}')
+        logger.info(f'Payload preview: {raw[:500]}')
+
         try:
             payload = request.get_json(force=True, silent=True)
             if payload is None:
@@ -548,6 +559,9 @@ def wix_order_webhook():
         logger.info(f'Parsed payload keys: {list(payload.keys()) if isinstance(payload, dict) else type(payload)}')
         order, order_data = auto_parse(payload)
         logger.info(f'Order parsed: {order.get("customer_name")} #{order.get("order_number")} total={order.get("total")}')
+        if not order.get('notes'):
+            wix_order_id = order_data.get('id', '')
+            order['notes'] = fetch_wix_buyer_note(wix_order_id)
         item_id = create_monday_item(order)
         logger.info(f'Created Monday item: {item_id}')
         add_raw_order_update(item_id, order_data)
