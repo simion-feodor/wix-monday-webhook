@@ -423,6 +423,7 @@ def parse_wix_ecommerce_order(order_data):
              order_data.get('note') or
              order_data.get('customerNote') or
              checkout_note or '')
+    logger.info(f'contact field: {repr(order_data.get("contact"))}')
     logger.info(f'Buyer note found: {repr(notes)} | checkoutCustomFields raw: {repr(order_data.get("checkoutCustomFields"))}')
 
     # Delivery time â check shippingInfo.logistics and root level
@@ -534,7 +535,7 @@ def wix_order_webhook():
     try:
         raw = request.get_data(as_text=True)
         logger.info(f'Received webhook, content-type: {request.content_type}, body length: {len(raw)}')
-        logger.info(f'Payload preview: {raw[:500]}')
+        logger.info(f'Payload preview: {raw[:3000]}')
         try:
             payload = request.get_json(force=True, silent=True)
             if payload is None:
