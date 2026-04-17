@@ -267,9 +267,11 @@ def add_raw_order_update(item_id, order_data):
             lines.append('')
 
         # Buyer note
+        checkout_note = next((str(f.get('value', '')) for f in (order_data.get('checkoutCustomFields') or []) if isinstance(f, dict) and f.get('value')), '')
         buyer_note = (order_data.get('buyerNote') or
                       (buyer.get('message') if isinstance(buyer, dict) else None) or
-                      order_data.get('note') or '')
+                      order_data.get('note') or
+                      checkout_note or '')
         if buyer_note:
             lines.append(f"Nota cumparator: {buyer_note}")
             lines.append('')
@@ -415,10 +417,12 @@ def parse_wix_ecommerce_order(order_data):
 
     # Buyer note â check multiple possible field names
     buyer_info = order_data.get('buyerInfo', {})
+    checkout_note = next((str(f.get('value', '')) for f in (order_data.get('checkoutCustomFields') or []) if isinstance(f, dict) and f.get('value')), '')
     notes = (order_data.get('buyerNote') or
              (buyer_info.get('message') if isinstance(buyer_info, dict) else None) or
              order_data.get('note') or
-             order_data.get('customerNote') or '')
+             order_data.get('customerNote') or
+             checkout_note or '')
     logger.info(f'Buyer note found: {repr(notes)}')
 
     # Delivery time â check shippingInfo.logistics and root level
