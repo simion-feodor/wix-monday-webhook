@@ -470,12 +470,26 @@ def parse_wix_ecommerce_order(order_data):
     else:
         delivery_slot = None
 
-    # Delivery date from deliveryTimeSlot.from ISO string
+    # Delivery date: try deliveryTimeSlot.from first, then parse delivery_time string
     delivery_date = None
     slot_from = logistics.get('deliveryTimeSlot', {}).get('from', '')
     if slot_from:
         try:
-            delivery_date = slot_from[:10]
+            delivery_date = slot_from[:10]  # e.g. "2026-04-20"
+        except Exception:
+            pass
+    if not delivery_date and delivery_time:
+        try:
+            from datetime import date as _date
+            months_ro = {'ian':1,'feb':2,'mar':3,'apr':4,'mai':5,'iun':6,
+                         'iul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+            m = re.search(r'(\d{1,2})\s+([a-z]{3})', delivery_time.lower())
+            if m:
+                day = int(m.group(1))
+                month = months_ro.get(m.group(2))
+                if month:
+                    year = _date.today().year
+                    delivery_date = f'{year}-{month:02d}-{day:02d}'
         except Exception:
             pass
 
