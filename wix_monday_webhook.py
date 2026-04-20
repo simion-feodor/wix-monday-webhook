@@ -143,8 +143,15 @@ def create_monday_item(order):
         col_vals['adress'] = full_address
 
     # HARTA â location column with geocoded real coordinates
+    # Use postal code + full country name for more precise geocoding
+    postal_code = order.get('postal_code', '')
+    geo_city = order.get('city', '')
+    geo_street = order.get('address', '')
+    city_part = (postal_code + ' ' + geo_city).strip() if postal_code else geo_city
+    geo_parts = [p for p in [geo_street, city_part, 'Romania'] if p]
+    geo_address = ', '.join(geo_parts) if geo_parts else full_address
     if full_address:
-        lat, lng = geocode_address(full_address)
+        lat, lng = geocode_address(geo_address)
     else:
         lat, lng = None, None
     # Fallback to Brasov city center if geocoding fails
@@ -168,6 +175,18 @@ def create_monday_item(order):
         col_vals['incasat'] = float(order['card_amount']) if order.get('card_amount') is not None else 0
     except (ValueError, TypeError):
         col_vals['incasat'] = 0
+
+    # LIVRARE (status3): PRANZ=index 15, SEARA=index 0, blank otherwise
+    slot = order.get('delivery_slot')
+    if slot == 'PRANZ':
+        col_vals['status3'] = {'index': 15}
+    elif slot == 'SEARA':
+        col_vals['status3'] = {'index': 0}
+
+    # PROGRAMARE (lead2): delivery date in YYYY-MM-DD format
+    delivery_date = order.get('delivery_date')
+    if delivery_date:
+        col_vals['lead2'] = {'date': delivery_date}
 
     col_vals_json = json.dumps(col_vals).replace('"', '\\"')
     # Item name = customer name only (order number goes in CMD column)
@@ -443,6 +462,26 @@ def parse_wix_ecommerce_order(order_data):
                      '')
     logger.info(f'Delivery time found: {repr(delivery_time)}')
 
+    # Delivery slot label (PRANZ / SEARA)
+    if '10:00 - 13:00' in delivery_time:
+        delivery_slot = 'PRANZ'
+    elif '17:00 - 19:00' in delivery_time:
+        delivery_slot = 'SEARA'
+    else:
+        delivery_slot = None
+
+    # Delivery date from deliveryTimeSlot.from ISO string
+    delivery_date = None
+    slot_from = logistics.get('deliveryTimeSlot', {}).get('from', '')
+    if slot_from:
+        try:
+            delivery_date = slot_from[:10]
+        except Exception:
+            pass
+
+    postal_code = (address_obj.get('postalCode', '') or
+                   logistics.get('shippingDestination', {}).get('address', {}).get('postalCode', ''))
+
     return {
         'order_number': extract_order_number(order_data),
         'customer_name': customer_name,
@@ -450,11 +489,14 @@ def parse_wix_ecommerce_order(order_data):
         'address': street,
         'city': city,
         'country': country,
+        'postal_code': postal_code,
         'total': total,
         'card_amount': card_amount,
         'products': products,
         'notes': notes,
         'delivery_time': delivery_time,
+        'delivery_slot': delivery_slot,
+        'delivery_date': delivery_date,
     }
 
 
