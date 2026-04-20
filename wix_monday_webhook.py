@@ -386,12 +386,7 @@ def parse_wix_ecommerce_order(order_data):
             pass
     logger.info(f'Final total: {total}')
 
-    card_amount = None
-    for pmt in order_data.get('payments', []):
-        # Card payment: Wix includes 'creditCardLastDigits' for card transactions
-        if pmt.get('creditCardLastDigits') and total > 0:
-            card_amount = total
-            break
+    card_amount = total if order_data.get('paymentStatus') == 'PAID' and total > 0 else None
 
     top_contact = order_data.get('contact', {})
     phone = (contact.get('phone') or
