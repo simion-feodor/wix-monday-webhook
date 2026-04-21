@@ -154,14 +154,13 @@ def create_monday_item(order):
         lat, lng = geocode_address(geo_address)
     else:
         lat, lng = None, None
-    # Fallback to Brasov city center if geocoding fails
-    if lat is None or lng is None:
-        lat, lng = 45.6427, 25.5887
-    col_vals['location'] = {
-        'lat': lat,
-        'lng': lng,
-        'address': full_address if full_address else 'Brasov, Romania'
-    }
+    # Only set location if geocoding succeeded — leave blank if it failed
+    if lat is not None and lng is not None:
+        col_vals['location'] = {
+            'lat': lat,
+            'lng': lng,
+            'address': full_address if full_address else 'Brasov, Romania'
+        }
 
     total = order.get('total')
     if total is not None and total != 0.0:
