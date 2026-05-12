@@ -106,8 +106,9 @@ def geocode_address(address):
 
     logger.warning(f'All geocoding failed for "{address}", using Brasov center fallback')
     return None, None
-def _post_monday(query, variables=None):
-    """Post a GraphQL query/mutation to Monday.com API."""
+def _post_monday(query, variables=None, retries=2):
+    """Post a GraphQL query/mutation to Monday.com API. Retries on timeout."""
+    import time
     headers = {
         'Authorization': MONDAY_API_KEY,
         'Content-Type': 'application/json',
@@ -116,9 +117,20 @@ def _post_monday(query, variables=None):
     payload = {'query': query}
     if variables:
         payload['variables'] = variables
-    resp = requests.post(MONDAY_API_URL, json=payload, headers=headers, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(1, retries + 2):
+        try:
+            resp = requests.post(MONDAY_API_URL, json=payload, headers=headers, timeout=20)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            if attempt <= retries:
+                logger.warning(f'Monday API timeout (attempt {attempt}/{retries + 1}), retrying in 3s: {e}')
+                time.sleep(3)
+            else:
+                logger.error(f'Monday API failed after {retries + 1} attempts: {e}')
+                raise
+        except Exception:
+            raise
 
 
 def create_monday_item(order):
