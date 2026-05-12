@@ -4,6 +4,7 @@ import json
 import base64
 import requests
 import logging
+import threading
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -106,9 +107,8 @@ def geocode_address(address):
 
     logger.warning(f'All geocoding failed for "{address}", using Brasov center fallback')
     return None, None
-def _post_monday(query, variables=None, retries=2):
-    """Post a GraphQL query/mutation to Monday.com API. Retries on timeout."""
-    import time
+def _post_monday(query, variables=None):
+    """Post a GraphQL query/mutation to Monday.com API."""
     headers = {
         'Authorization': MONDAY_API_KEY,
         'Content-Type': 'application/json',
@@ -117,20 +117,9 @@ def _post_monday(query, variables=None, retries=2):
     payload = {'query': query}
     if variables:
         payload['variables'] = variables
-    for attempt in range(1, retries + 2):
-        try:
-            resp = requests.post(MONDAY_API_URL, json=payload, headers=headers, timeout=20)
-            resp.raise_for_status()
-            return resp.json()
-        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
-            if attempt <= retries:
-                logger.warning(f'Monday API timeout (attempt {attempt}/{retries + 1}), retrying in 3s: {e}')
-                time.sleep(3)
-            else:
-                logger.error(f'Monday API failed after {retries + 1} attempts: {e}')
-                raise
-        except Exception:
-            raise
+    resp = requests.post(MONDAY_API_URL, json=payload, headers=headers, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def create_monday_item(order):
@@ -600,6 +589,34 @@ def auto_parse(payload):
         return parse_wix_ecommerce_order(order_data), order_data
 
 
+def process_order_in_background(order, order_data):
+    """Create Monday item with retry logic — runs in a background thread.
+    Retries up to 3 times with a 10-minute wait between attempts on timeout/connection errors.
+    """
+    import time
+    max_attempts = 3
+    retry_delay = 600  # 10 minutes
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            item_id = create_monday_item(order)
+            logger.info(f'Created Monday item: {item_id} (attempt {attempt})')
+            add_raw_order_update(item_id, order_data)
+            logger.info(f'Raw data update added to item {item_id}')
+            add_order_summary_update(item_id, order)
+            logger.info(f'Summary update added to item {item_id}')
+            return  # success
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            if attempt < max_attempts:
+                logger.warning(f'Monday API timeout for order #{order.get("order_number")} (attempt {attempt}/{max_attempts}), retrying in 10 min: {e}')
+                time.sleep(retry_delay)
+            else:
+                logger.error(f'Monday API failed after {max_attempts} attempts for order #{order.get("order_number")}: {e}')
+        except Exception as e:
+            logger.error(f'Unexpected error creating Monday item for order #{order.get("order_number")}: {e}', exc_info=True)
+            return  # don't retry on non-timeout errors
+
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'wix-monday-webhook'}), 200
@@ -624,13 +641,11 @@ def wix_order_webhook():
         if not order.get('notes'):
             wix_order_id = order_data.get('id', '')
             order['notes'] = fetch_wix_buyer_note(wix_order_id)
-        item_id = create_monday_item(order)
-        logger.info(f'Created Monday item: {item_id}')
-        add_raw_order_update(item_id, order_data)
-        logger.info(f'Raw data update added to item {item_id}')
-        add_order_summary_update(item_id, order)
-        logger.info(f'Summary update added to item {item_id}')
-        return jsonify({'status': 'ok', 'item_id': item_id}), 200
+        thread = threading.Thread(target=process_order_in_background, args=(order, order_data))
+        thread.daemon = True
+        thread.start()
+        logger.info(f'Background thread started for order #{order.get("order_number")}')
+        return jsonify({'status': 'ok', 'order': order.get('order_number')}), 200
     except Exception as e:
         logger.error(f'Error processing webhook: {e}', exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
