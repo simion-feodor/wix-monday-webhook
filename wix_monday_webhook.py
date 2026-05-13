@@ -696,7 +696,11 @@ def extract_contact_from_old_form(json_body):
             elif any(t in title for t in ['nume', 'name', 'prenume', 'client']):
                 if 'name' not in contact:
                     contact['name'] = value
-            elif any(t in title for t in ['mesaj', 'message', 'intrebare', 'detalii', 'observ']):
+            elif any(t in title for t in ['localitate', 'oras', 'city', 'loc ', 'localitatea']):
+                contact['localitate'] = value
+            elif any(t in title for t in ['adresa', 'address', 'strada', 'stradÄ']):
+                contact['adresa'] = value
+            elif any(t in title for t in ['mesaj', 'message', 'intrebare', 'Ã®ntrebare', 'detalii', 'observ']):
                 contact['message'] = value
 
     # Include contactId for traceability
@@ -724,7 +728,7 @@ def create_lead_monday_item(contact, form_name=None):
 
     # Format A: CRM nested
     phones = info.get('phones', {}).get('items', [])
-    phone = phones[0].get('phone', '') if phones else primary.get('phone', '')
+    phone = phones[0].get('phone', '') if phones else primary.get('Phone', '')
     emails = info.get('emails', {}).get('items', [])
     email = emails[0].get('email', '') if emails else primary.get('email', '')
     addresses = info.get('addresses', {}).get('items', [])
@@ -734,13 +738,19 @@ def create_lead_monday_item(contact, form_name=None):
 
     # Format B: flat contact (Form submitted trigger)
     if not phone:
-        phone = contact.get('phone', '')
+        phone = contact.get('Phone', '')
     if not email:
         email = contact.get('email', '')
     if not city:
         addr = contact.get('address', {})
         if isinstance(addr, dict):
             city = addr.get('addressLine', '') or addr.get('city', '')
+
+    # Old form flat fields
+    name       = contact.get('name', '')
+    localitate = contact.get('localitate', '') or city
+    adresa     = contact.get('adresa', '')
+    message    = contact.get('message', '')
 
     # Determine display form name: explicit > label mapping > default
     form_name_from_label = FORM_LABELS.get(label_key, '')
@@ -749,7 +759,8 @@ def create_lead_monday_item(contact, form_name=None):
     created = contact.get('createdDate', '')
     date_str = created[:10] if created else datetime.utcnow().strftime('%Y-%m-%d')
 
-    identifier = phone or email or contact.get('id', '') or contact.get('contactId', 'Lead nou')
+    # Item name: Nume â FormName (fallback to phone/email if no name)
+    identifier = name or phone or email or contact.get('id', '') or contact.get('contactId', 'Lead nou')
     item_name = f'{identifier} â {final_form_name}'
 
     col_vals = {
@@ -761,8 +772,10 @@ def create_lead_monday_item(contact, form_name=None):
         col_vals['phone8'] = {'phone': phone, 'countryShortName': 'RO'}
     if email:
         col_vals['e_mail6'] = {'email': email, 'text': email}
-    if city:
-        col_vals['text'] = city
+    if localitate:
+        col_vals['text'] = localitate          # ORAS column
+    if adresa:
+        col_vals['adress'] = adresa            # ADRESA column
 
     col_vals_str = json.dumps(json.dumps(col_vals))  # double-encoded for inline GraphQL
 
@@ -776,7 +789,32 @@ def create_lead_monday_item(contact, form_name=None):
       ) {{ id name }}
     }}'''
 
-    return _post_monday(query)
+    result = _post_monday(query)
+
+    # Add update with message content if present
+    if message:
+        item_id = result.get('data', {}).get('create_item', {}).get('id')
+        if item_id:
+            try:
+                update_lines = []
+                if name:
+                    update_lines.append(f'Nume: {name}')
+                if phone:
+                    update_lines.append(f'Telefon: {phone}')
+                if localitate:
+                    update_lines.append(f'Localitate: {localitate}')
+                if adresa:
+                    update_lines.append(f'Adresa: {adresa}')
+                update_lines.append('')
+                update_lines.append(f'Mesaj:\n{message}')
+                body = '\n'.join(update_lines)
+                upd_query = 'mutation ($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }'
+                _post_monday(upd_query, {'itemId': str(item_id), 'body': body})
+                logger.info(f'Update with message added to item {item_id}')
+            except Exception as e:
+                logger.warning(f'Could not add message update: {e}')
+
+    return result
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -880,4 +918,4 @@ def wix_contact_webhook():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
- 
+   
