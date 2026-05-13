@@ -656,29 +656,45 @@ def extract_contact_from_payload(raw_body, json_body):
 
     return None
 
-def create_lead_monday_item(contact):
-    """Create a Monday item in LEAD-URI board from a Wix CRM contact."""
+def create_lead_monday_item(contact, form_name=None):
+    """Create a Monday item in LEAD-URI board from a Wix contact.
+
+    Handles two contact formats:
+    - Format A: CRM nested (New contact created) — info.phones.items[], info.emails.items[]
+    - Format B: flat (Form submitted)            — contact.phone, contact.email directly
+    """
     info = contact.get('info', {})
     primary = contact.get('primaryInfo', {})
 
+    # Format A: CRM nested
     phones = info.get('phones', {}).get('items', [])
     phone = phones[0].get('phone', '') if phones else primary.get('phone', '')
-
     emails = info.get('emails', {}).get('items', [])
     email = emails[0].get('email', '') if emails else primary.get('email', '')
-
     addresses = info.get('addresses', {}).get('items', [])
     city = addresses[0].get('address', {}).get('addressLine', '') if addresses else ''
-
     label_keys = info.get('labelKeys', {}).get('items', [])
     label_key = label_keys[0] if label_keys else ''
-    form_name = FORM_LABELS.get(label_key, 'FORMULAR')
+
+    # Format B: flat contact (Form submitted trigger)
+    if not phone:
+        phone = contact.get('phone', '')
+    if not email:
+        email = contact.get('email', '')
+    if not city:
+        addr = contact.get('address', {})
+        if isinstance(addr, dict):
+            city = addr.get('addressLine', '') or addr.get('city', '')
+
+    # Determine display form name: explicit > label mapping > default
+    form_name_from_label = FORM_LABELS.get(label_key, '')
+    final_form_name = form_name or form_name_from_label or 'FORMULAR'
 
     created = contact.get('createdDate', '')
     date_str = created[:10] if created else datetime.utcnow().strftime('%Y-%m-%d')
 
-    identifier = phone or email or contact.get('id', 'Lead nou')
-    item_name = f'{identifier} — {form_name}'
+    identifier = phone or email or contact.get('id', '') or contact.get('contactId', 'Lead nou')
+    item_name = f'{identifier} — {final_form_name}'
 
     col_vals = {
         'sursa_lead': {'label': 'CityCATS.ro'},
@@ -764,8 +780,11 @@ def wix_contact_webhook():
             logger.info(f'Ignoring contact — source: {source_type}')
             return jsonify({'received': True, 'status': 'ignored', 'source': source_type}), 200
 
-        logger.info(f'WIX_FORMS contact: {contact.get("id")}')
-        result = create_lead_monday_item(contact)
+        # Extract form name from payload (available when trigger = "Form submitted")
+        payload_form_name = (json_body or {}).get('formName', '') or ''
+
+        logger.info(f'Contact received, form: {payload_form_name or "(from label key)"}')
+        result = create_lead_monday_item(contact, form_name=payload_form_name)
 
         item = result.get('data', {}).get('create_item', {})
         if item.get('id'):
@@ -779,6 +798,6 @@ def wix_contact_webhook():
         logger.error(f'Error in contact webhook: {e}', exc_info=True)
         return jsonify({'received': True, 'status': 'error', 'message': str(e)}), 200
 
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
