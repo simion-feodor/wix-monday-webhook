@@ -5,6 +5,7 @@ import base64
 import requests
 import logging
 import threading
+from datetime import datetime
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -18,6 +19,25 @@ WIX_SITE_ID = '9fcc00dd-2c45-410f-9dca-9360fdb28ac6'
 BOARD_ID = 804109007
 GROUP_ID = 'new_group3802'
 
+# ─── LEAD-URI Board (citycats.ro forms) ──────────────────────────────────────
+LEAD_BOARD_ID = 18413029793
+LEAD_GROUP_ID = 'topics'
+
+FORM_LABELS = {
+    'custom.contact-us':               'Pop-Up',
+    'custom.contact-us-2':             'Strip / Acasa',
+    'custom.contact-lp':               'PROMO',
+    'custom.contact-1-acasa-2':        'strip plase-pisici form',
+    'custom.contact-1-acasa-3':        'plase de protectie / strip',
+    'custom.contact-1-acasa-4':        'blog / strip',
+    'custom.formular-blog-2':          'formular blog 2',
+    'custom.formular-blog-3':          'formular blog post',
+    'custom.magazin-form':             'magazin / form',
+    'custom.plase-de-protectie-strip-2': 'plase de protectie (L)',
+    'custom.strip-plase-pisici-form-2':  'strip plase-pisici (L)',
+    'custom.enter-contest':            'Enter Contest',
+    'custom.get-a-price-quote':        'Get a Price Quote',
+}
 
 def to_int(val):
     """Try to convert value to int. Return None if not possible."""
@@ -27,7 +47,6 @@ def to_int(val):
         return int(str(val).strip())
     except (ValueError, TypeError):
         return None
-
 
 def fetch_wix_buyer_note(order_id):
     """Fetch buyerNote from Wix eCommerce API — it's not in the webhook payload."""
@@ -51,7 +70,6 @@ def clean_for_geocoding(address):
     cleaned = re.sub(r',\s*,', ',', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip().strip(',').strip()
     return cleaned
-
 
 def geocode_address(address):
     """Get real lat/lng for an address. Tries Nominatim then Photon as fallback."""
@@ -107,6 +125,7 @@ def geocode_address(address):
 
     logger.warning(f'All geocoding failed for "{address}", using Brasov center fallback')
     return None, None
+
 def _post_monday(query, variables=None):
     """Post a GraphQL query/mutation to Monday.com API."""
     headers = {
@@ -121,11 +140,10 @@ def _post_monday(query, variables=None):
     resp.raise_for_status()
     return resp.json()
 
-
 def create_monday_item(order):
     col_vals = {}
 
-    # CMD (text_mm2bgzbx) â text column for order number
+    # CMD (text_mm2bgzbx) — text column for order number
     order_num = order.get('order_number')
     if order_num is not None:
         col_vals['text_mm2bgzbx'] = str(order_num)
@@ -133,7 +151,7 @@ def create_monday_item(order):
     if order.get('phone'):
         col_vals['phone8'] = {'phone': str(order['phone']), 'countryShortName': 'RO'}
 
-    # ADRESA â plain text column with full delivery address
+    # ADRESA — plain text column with full delivery address
     addr_parts = [p for p in [
         order.get('address', ''),
         order.get('city', ''),
@@ -143,8 +161,7 @@ def create_monday_item(order):
     if full_address:
         col_vals['adress'] = full_address
 
-    # HARTA â location column with geocoded real coordinates
-    # Use postal code + full country name for more precise geocoding
+    # HARTA — location column with geocoded real coordinates
     postal_code = order.get('postal_code', '')
     geo_city = order.get('city', '')
     geo_street = order.get('address', '')
@@ -155,7 +172,6 @@ def create_monday_item(order):
         lat, lng = geocode_address(geo_address)
     else:
         lat, lng = None, None
-    # Only set location if geocoding succeeded — leave blank if it failed
     if lat is not None and lng is not None:
         col_vals['location'] = {
             'lat': lat,
@@ -189,7 +205,6 @@ def create_monday_item(order):
         col_vals['lead2'] = {'date': delivery_date}
 
     col_vals_json = json.dumps(col_vals).replace('"', '\\"')
-    # Item name = customer name only (order number goes in CMD column)
     customer = str(order.get('customer_name', 'New Order')).replace('"', '').replace("'", '')
     item_name = customer[:255]
 
@@ -206,7 +221,6 @@ def create_monday_item(order):
     if 'errors' in data:
         raise Exception('Monday API errors: ' + str(data['errors']))
     return data['data']['create_item']['id']
-
 
 def add_order_summary_update(item_id, order):
     """First update: clean readable summary of the order."""
@@ -227,7 +241,6 @@ def add_order_summary_update(item_id, order):
     lines.append('')
     total = order.get('total', 'N/A')
     lines.append(f"Total: {total} RON")
-    # Payment method â always explicit
     if order.get('card_amount') is not None:
         lines.append(f"Plata: Card ({order['card_amount']} RON)")
     else:
@@ -249,12 +262,10 @@ def add_order_summary_update(item_id, order):
     query = 'mutation ($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }'
     _post_monday(query, {'itemId': str(item_id), 'body': body})
 
-
 def add_raw_order_update(item_id, order_data):
     """Second update: key input fields from the Wix order payload."""
     try:
         def pick(d, *keys):
-            """Safely get a nested value."""
             for k in keys:
                 if not isinstance(d, dict):
                     return None
@@ -265,14 +276,12 @@ def add_raw_order_update(item_id, order_data):
         lines.append('DATE INTRARE COMANDA (Wix):')
         lines.append('')
 
-        # Order identifiers
         lines.append(f"ID comanda: {order_data.get('id', 'N/A')}")
         lines.append(f"Numar comanda: {order_data.get('number', order_data.get('orderNumber', 'N/A'))}")
         lines.append(f"Status: {order_data.get('status', order_data.get('fulfillmentStatus', 'N/A'))}")
         lines.append(f"Status plata: {order_data.get('paymentStatus', 'N/A')}")
         lines.append('')
 
-        # Buyer info
         buyer = order_data.get('buyerInfo', {})
         billing = order_data.get('billingInfo', {})
         contact = billing.get('contactDetails', {}) if isinstance(billing, dict) else {}
@@ -282,7 +291,6 @@ def add_raw_order_update(item_id, order_data):
         lines.append(f"  Nume: {contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or 'N/A')
         lines.append('')
 
-        # Shipping address
         shipping = order_data.get('shippingInfo', {})
         shipment = shipping.get('shipmentDetails', {}) if isinstance(shipping, dict) else {}
         ship_addr = shipment.get('address', {}) if isinstance(shipment, dict) else {}
@@ -294,24 +302,21 @@ def add_raw_order_update(item_id, order_data):
         lines.append(f"  Tara: {addr.get('country', 'N/A')}")
         lines.append('')
 
-        # Delivery time
         logistics = shipping.get('logistics', {}) if isinstance(shipping, dict) else {}
         delivery_time = (order_data.get('deliveryTime') or
-                         logistics.get('deliveryTime') or
-                         shipping.get('deliveryTime') or '')
+                        logistics.get('deliveryTime') or
+                        shipping.get('deliveryTime') or '')
         if delivery_time:
             lines.append(f"Interval livrare: {delivery_time}")
             lines.append('')
 
-        # Buyer note
         buyer_note = (order_data.get('buyerNote') or
-                      (buyer.get('message') if isinstance(buyer, dict) else None) or
-                      order_data.get('note') or '')
+                     (buyer.get('message') if isinstance(buyer, dict) else None) or
+                     order_data.get('note') or '')
         if buyer_note:
             lines.append(f"Nota cumparator: {buyer_note}")
             lines.append('')
 
-        # Products
         lines.append('Produse:')
         for item in order_data.get('lineItems', []):
             name = (item.get('itemName') or item.get('name') or item.get('productName') or 'Produs')
@@ -323,7 +328,6 @@ def add_raw_order_update(item_id, order_data):
             lines.append(f"  {name} | qty: {qty} | pret: {price} RON")
         lines.append('')
 
-        # Totals
         pricing = order_data.get('priceSummary', {})
         lines.append('Sumar preturi:')
         for key, label in [('subtotal', 'Subtotal'), ('shipping', 'Transport'), ('discount', 'Discount'), ('total', 'Total')]:
@@ -334,7 +338,6 @@ def add_raw_order_update(item_id, order_data):
                 lines.append(f"  {label}: {val} RON")
         lines.append('')
 
-        # Payments
         lines.append('Plata:')
         for pmt in order_data.get('payments', []):
             method = pmt.get('paymentMethod', pmt.get('type', 'N/A'))
@@ -351,7 +354,6 @@ def add_raw_order_update(item_id, order_data):
     query = 'mutation ($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }'
     _post_monday(query, {'itemId': str(item_id), 'body': body})
 
-
 def extract_order_number(order_data):
     """Try every possible field name for a numeric order number."""
     for key in ['number', 'orderNumber', 'order_number', 'sequenceNumber', 'num']:
@@ -364,7 +366,6 @@ def extract_order_number(order_data):
         if val:
             return str(val)
     return None
-
 
 def parse_wix_ecommerce_order(order_data):
     billing = order_data.get('billingInfo', {})
@@ -421,7 +422,6 @@ def parse_wix_ecommerce_order(order_data):
 
     products = []
     for line in order_data.get('lineItems', []):
-        # Product name: Wix uses 'itemName' field
         pname = (line.get('itemName') or
                  line.get('name') or
                  line.get('productName') or
@@ -429,7 +429,6 @@ def parse_wix_ecommerce_order(order_data):
                  'Produs')
         if isinstance(pname, dict):
             pname = pname.get('original') or pname.get('translated') or 'Produs'
-        # Price: Wix uses 'totalPrice.value'
         price_obj = line.get('totalPrice', line.get('price', line.get('priceData', {})))
         if isinstance(price_obj, dict):
             price_val = price_obj.get('value', price_obj.get('amount', ''))
@@ -445,7 +444,6 @@ def parse_wix_ecommerce_order(order_data):
     last = contact.get('lastName', billing.get('lastName', ''))
     customer_name = f"{first} {last}".strip() or 'Client'
 
-    # Buyer note â check multiple possible field names
     buyer_info = order_data.get('buyerInfo', {})
     notes = (order_data.get('buyerNote') or
              (buyer_info.get('message') if isinstance(buyer_info, dict) else None) or
@@ -453,7 +451,6 @@ def parse_wix_ecommerce_order(order_data):
              order_data.get('customerNote') or '')
     logger.info(f'Buyer note found: {repr(notes)}')
 
-    # Delivery time â check shippingInfo.logistics and root level
     logistics = shipping.get('logistics', {})
     delivery_time = (order_data.get('deliveryTime') or
                      logistics.get('deliveryTime') or
@@ -462,7 +459,6 @@ def parse_wix_ecommerce_order(order_data):
                      '')
     logger.info(f'Delivery time found: {repr(delivery_time)}')
 
-    # Delivery slot label (PRANZ / SEARA)
     if '10:00 - 13:00' in delivery_time:
         delivery_slot = 'PRANZ'
     elif '17:00 - 19:00' in delivery_time:
@@ -470,19 +466,18 @@ def parse_wix_ecommerce_order(order_data):
     else:
         delivery_slot = None
 
-    # Delivery date: try deliveryTimeSlot.from first, then parse delivery_time string
     delivery_date = None
     slot_from = logistics.get('deliveryTimeSlot', {}).get('from', '')
     if slot_from:
         try:
-            delivery_date = slot_from[:10]  # e.g. "2026-04-20"
+            delivery_date = slot_from[:10]
         except Exception:
             pass
     if not delivery_date and delivery_time:
         try:
             from datetime import date as _date
             months_ro = {'ian':1,'feb':2,'mar':3,'apr':4,'mai':5,'iun':6,
-                         'iul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+                        'iul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
             m = re.search(r'(\d{1,2})\s+([a-z]{3})', delivery_time.lower())
             if m:
                 day = int(m.group(1))
@@ -512,7 +507,6 @@ def parse_wix_ecommerce_order(order_data):
         'delivery_slot': delivery_slot,
         'delivery_date': delivery_date,
     }
-
 
 def parse_wix_stores_order(order_data):
     billing = order_data.get('billingInfo', {})
@@ -546,12 +540,11 @@ def parse_wix_stores_order(order_data):
         'delivery_time': order_data.get('deliveryTime', ''),
     }
 
-
 def unwrap_payload(payload):
     """Unwrap Wix automation wrapper layers and base64 encoding."""
     if isinstance(payload, str):
         try:
-            payload = json.loads(provide)
+            payload = json.loads(payload)
         except Exception:
             try:
                 payload = json.loads(base64.b64decode(payload + '==').decode('utf-8'))
@@ -571,7 +564,6 @@ def unwrap_payload(payload):
             payload = inner
     return payload
 
-
 def auto_parse(payload):
     """Returns (parsed_order_dict, raw_order_data_dict)."""
     order_data = unwrap_payload(payload)
@@ -588,11 +580,8 @@ def auto_parse(payload):
         logger.warning('Unknown payload format, attempting ecommerce parse')
         return parse_wix_ecommerce_order(order_data), order_data
 
-
 def process_order_in_background(order, order_data):
-    """Create Monday item with retry logic — runs in a background thread.
-    Retries up to 3 times with a 10-minute wait between attempts on timeout/connection errors.
-    """
+    """Create Monday item with retry logic — runs in a background thread."""
     import time
     max_attempts = 3
     retry_delay = 600  # 10 minutes
@@ -605,7 +594,7 @@ def process_order_in_background(order, order_data):
             logger.info(f'Raw data update added to item {item_id}')
             add_order_summary_update(item_id, order)
             logger.info(f'Summary update added to item {item_id}')
-            return  # success
+            return
         except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
             if attempt < max_attempts:
                 logger.warning(f'Monday API timeout for order #{order.get("order_number")} (attempt {attempt}/{max_attempts}), retrying in 10 min: {e}')
@@ -614,13 +603,112 @@ def process_order_in_background(order, order_data):
                 logger.error(f'Monday API failed after {max_attempts} attempts for order #{order.get("order_number")}: {e}')
         except Exception as e:
             logger.error(f'Unexpected error creating Monday item for order #{order.get("order_number")}: {e}', exc_info=True)
-            return  # don't retry on non-timeout errors
+            return
 
+# ─── Contact (Form Lead) Functions ───────────────────────────────────────────
+
+def decode_wix_jwt(token):
+    """Decode Wix JWT without signature verification."""
+    try:
+        parts = token.strip().split('.')
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += '=' * padding
+        payload = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
+        return json.loads(payload)
+    except Exception as e:
+        logger.warning(f'JWT decode failed: {e}')
+        return None
+
+def extract_contact_from_payload(raw_body, json_body):
+    """Extract contact entity from Wix webhook payload (JWT or plain JSON)."""
+    # Format 1: JWT (3 dot-separated segments)
+    if isinstance(raw_body, str) and raw_body.count('.') >= 2:
+        parts = raw_body.strip().split('.')
+        if len(parts) == 3:
+            decoded = decode_wix_jwt(raw_body)
+            if decoded and decoded.get('data'):
+                try:
+                    inner = decoded['data']
+                    if isinstance(inner, str):
+                        inner = json.loads(inner)
+                    if isinstance(inner, dict):
+                        if inner.get('createdEvent', {}).get('entity'):
+                            return inner['createdEvent']['entity']
+                        if inner.get('entity'):
+                            return inner['entity']
+                except Exception:
+                    pass
+
+    # Format 2: plain JSON
+    if json_body:
+        if isinstance(json_body.get('createdEvent'), dict) and json_body['createdEvent'].get('entity'):
+            return json_body['createdEvent']['entity']
+        if json_body.get('contact'):
+            return json_body['contact']
+        if json_body.get('entity'):
+            return json_body['entity']
+        if json_body.get('id') and (json_body.get('info') or json_body.get('primaryInfo')):
+            return json_body
+
+    return None
+
+def create_lead_monday_item(contact):
+    """Create a Monday item in LEAD-URI board from a Wix CRM contact."""
+    info = contact.get('info', {})
+    primary = contact.get('primaryInfo', {})
+
+    phones = info.get('phones', {}).get('items', [])
+    phone = phones[0].get('phone', '') if phones else primary.get('phone', '')
+
+    emails = info.get('emails', {}).get('items', [])
+    email = emails[0].get('email', '') if emails else primary.get('email', '')
+
+    addresses = info.get('addresses', {}).get('items', [])
+    city = addresses[0].get('address', {}).get('addressLine', '') if addresses else ''
+
+    label_keys = info.get('labelKeys', {}).get('items', [])
+    label_key = label_keys[0] if label_keys else ''
+    form_name = FORM_LABELS.get(label_key, 'FORMULAR')
+
+    created = contact.get('createdDate', '')
+    date_str = created[:10] if created else datetime.utcnow().strftime('%Y-%m-%d')
+
+    identifier = phone or email or contact.get('id', 'Lead nou')
+    item_name = f'{identifier} — {form_name}'
+
+    col_vals = {
+        'sursa_lead': {'label': 'CityCATS.ro'},
+        'status':     {'label': 'LEAD'},
+        'lead':       {'date': date_str},
+    }
+    if phone:
+        col_vals['phone8'] = {'phone': phone, 'countryShortName': 'RO'}
+    if email:
+        col_vals['e_mail6'] = {'email': email, 'text': email}
+    if city:
+        col_vals['text'] = city
+
+    col_vals_str = json.dumps(json.dumps(col_vals))  # double-encoded for inline GraphQL
+
+    safe_name = item_name.replace('"', '').replace('\\', '')[:255]
+    query = f'''mutation {{
+      create_item(
+        board_id: {LEAD_BOARD_ID},
+        group_id: "{LEAD_GROUP_ID}",
+        item_name: {json.dumps(safe_name)},
+        column_values: {col_vals_str}
+      ) {{ id name }}
+    }}'''
+
+    return _post_monday(query)
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'wix-monday-webhook'}), 200
-
 
 @app.route('/webhook/wix-order', methods=['POST'])
 def wix_order_webhook():
@@ -650,6 +738,46 @@ def wix_order_webhook():
         logger.error(f'Error processing webhook: {e}', exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/webhook/wix-contact', methods=['POST'])
+def wix_contact_webhook():
+    """Handle Wix contact-created webhooks — creates lead in Monday LEAD-URI board."""
+    ts = datetime.utcnow().isoformat()
+    logger.info(f'[{ts}] Contact webhook received')
+
+    try:
+        raw = request.get_data(as_text=True)
+        logger.info(f'Content-type: {request.content_type}, body length: {len(raw)}')
+
+        try:
+            json_body = request.get_json(force=True, silent=True)
+        except Exception:
+            json_body = None
+
+        contact = extract_contact_from_payload(raw, json_body)
+
+        if not contact:
+            logger.warning(f'Could not extract contact. Body preview: {raw[:300]}')
+            return jsonify({'received': True, 'status': 'no_contact'}), 200
+
+        source_type = contact.get('source', {}).get('sourceType', '')
+        if source_type and source_type != 'WIX_FORMS':
+            logger.info(f'Ignoring contact — source: {source_type}')
+            return jsonify({'received': True, 'status': 'ignored', 'source': source_type}), 200
+
+        logger.info(f'WIX_FORMS contact: {contact.get("id")}')
+        result = create_lead_monday_item(contact)
+
+        item = result.get('data', {}).get('create_item', {})
+        if item.get('id'):
+            logger.info(f'Monday item created: {item["name"]} (ID: {item["id"]})')
+            return jsonify({'received': True, 'status': 'created', 'monday_id': item['id']}), 200
+        else:
+            logger.warning(f'Monday response: {str(result)[:300]}')
+            return jsonify({'received': True, 'status': 'monday_error', 'detail': str(result)[:200]}), 200
+
+    except Exception as e:
+        logger.error(f'Error in contact webhook: {e}', exc_info=True)
+        return jsonify({'received': True, 'status': 'error', 'message': str(e)}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
