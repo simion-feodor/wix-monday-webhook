@@ -58,7 +58,7 @@ def fetch_wix_buyer_note(order_id):
         resp = requests.get(url, headers=headers, timeout=8)
         resp.raise_for_status()
         note = resp.json().get('order', {}).get('buyerNote', '') or ''
-    2   logger.info(f'Wix buyerNote fetched: {repr(note)}')
+        logger.info(f'Wix buyerNote fetched: {repr(note)}')
         return note
     except Exception as e:
         logger.warning(f'Failed to fetch Wix buyerNote: {e}')
@@ -683,7 +683,8 @@ def extract_contact_from_old_form(json_body):
         for sub in submissions:
             if not isinstance(sub, dict):
                 continue
-            title = (sub.get('fieldTitle') or sub.get('field_title') or '').lower().strip()
+            title = (sub.get('fieldTitle') or sub.get('field_title') or
+                     sub.get('label') or sub.get('Label') or '').lower().strip()
             value = (sub.get('fieldInputValue') or sub.get('fieldValue') or
                      sub.get('field_value') or sub.get('value') or '').strip()
             if not value:
@@ -811,4 +812,72 @@ def wix_order_webhook():
 
 @app.route('/webhook/wix-contact', methods=['POST'])
 def wix_contact_webhook():
-    """Handle Wix contact-created and Old
+    """Handle Wix contact-created and Old Wix Forms webhooks â creates lead in Monday LEAD-URI board."""
+    ts = datetime.utcnow().isoformat()
+    logger.info(f'[{ts}] Contact webhook received')
+
+    try:
+        raw = request.get_data(as_text=True)
+        logger.info(f'Content-type: {request.content_type}, body length: {len(raw)}')
+        logger.info(f'Payload preview: {raw[:500]}')
+
+        try:
+            json_body = request.get_json(force=True, silent=True)
+        except Exception:
+            json_body = None
+
+        # ââ Old Wix Forms format (submissions array or formName present) ââââââ
+        # Payload may be wrapped: {"data": {"formName": ..., "submissions": [...]}}
+        _form_data = json_body
+        if isinstance(json_body, dict) and isinstance(json_body.get('data'), dict):
+            _inner = json_body['data']
+            if 'formName' in _inner or 'submissions' in _inner or 'submissionId' in _inner:
+                _form_data = _inner
+        if _form_data and ('submissions' in _form_data or 'formName' in _form_data or 'submissionId' in _form_data):
+            form_name = _form_data.get('formName', '') or 'FORMULAR'
+            logger.info(f'Old Wix Forms payload detected, form: {form_name}')
+            contact = extract_contact_from_old_form(_form_data)
+            if not contact:
+                logger.warning(f'Old Wix Forms: could not extract contact. Body: {raw[:300]}')
+                return jsonify({'received': True, 'status': 'no_contact_old_form'}), 200
+            result = create_lead_monday_item(contact, form_name=form_name)
+            item = result.get('data', {}).get('create_item', {})
+            if item.get('id'):
+                logger.info(f'Monday item created (old form): {item["name"]} (ID: {item["id"]})')
+                return jsonify({'received': True, 'status': 'created', 'monday_id': item['id']}), 200
+            else:
+                logger.warning(f'Monday response: {str(result)[:300]}')
+                return jsonify({'received': True, 'status': 'monday_error', 'detail': str(result)[:200]}), 200
+
+        # ââ CRM contact-created format (JWT or createdEvent/entity) ââââââââââ
+        contact = extract_contact_from_payload(raw, json_body)
+
+        if not contact:
+            logger.warning(f'Could not extract contact. Body preview: {raw[:300]}')
+            return jsonify({'received': True, 'status': 'no_contact'}), 200
+
+        source_type = contact.get('source', {}).get('sourceType', '')
+        if source_type and source_type != 'WIX_FORMS':
+            logger.info(f'Ignoring contact â source: {source_type}')
+            return jsonify({'received': True, 'status': 'ignored', 'source': source_type}), 200
+
+        payload_form_name = (json_body or {}).get('formName', '') or ''
+        logger.info(f'Contact received, form: {payload_form_name or "(from label key)"}')
+        result = create_lead_monday_item(contact, form_name=payload_form_name)
+
+        item = result.get('data', {}).get('create_item', {})
+        if item.get('id'):
+            logger.info(f'Monday item created: {item["name"]} (ID: {item["id"]})')
+            return jsonify({'received': True, 'status': 'created', 'monday_id': item['id']}), 200
+        else:
+            logger.warning(f'Monday response: {str(result)[:300]}')
+            return jsonify({'received': True, 'status': 'monday_error', 'detail': str(result)[:200]}), 200
+
+    except Exception as e:
+        logger.error(f'Error in contact webhook: {e}', exc_info=True)
+        return jsonify({'received': True, 'status': 'error', 'message': str(e)}), 200
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+ 
