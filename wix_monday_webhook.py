@@ -19,7 +19,7 @@ WIX_SITE_ID = '9fcc00dd-2c45-410f-9dca-9360fdb28ac6'
 BOARD_ID = 804109007
 GROUP_ID = 'new_group3802'
 
-# ─── LEAD-URI Board (citycats.ro forms) ──────────────────────────────────────
+# âââ LEAD-URI Board (citycats.ro forms) ââââââââââââââââââââââââââââââââââââââ
 LEAD_BOARD_ID = 18413029793
 LEAD_GROUP_ID = 'topics'
 
@@ -49,7 +49,7 @@ def to_int(val):
         return None
 
 def fetch_wix_buyer_note(order_id):
-    """Fetch buyerNote from Wix eCommerce API — it's not in the webhook payload."""
+    """Fetch buyerNote from Wix eCommerce API â it's not in the webhook payload."""
     if not WIX_API_KEY or not order_id:
         return ''
     try:
@@ -58,7 +58,7 @@ def fetch_wix_buyer_note(order_id):
         resp = requests.get(url, headers=headers, timeout=8)
         resp.raise_for_status()
         note = resp.json().get('order', {}).get('buyerNote', '') or ''
-        logger.info(f'Wix buyerNote fetched: {repr(note)}')
+    2   logger.info(f'Wix buyerNote fetched: {repr(note)}')
         return note
     except Exception as e:
         logger.warning(f'Failed to fetch Wix buyerNote: {e}')
@@ -143,7 +143,7 @@ def _post_monday(query, variables=None):
 def create_monday_item(order):
     col_vals = {}
 
-    # CMD (text_mm2bgzbx) — text column for order number
+    # CMD (text_mm2bgzbx) â text column for order number
     order_num = order.get('order_number')
     if order_num is not None:
         col_vals['text_mm2bgzbx'] = str(order_num)
@@ -151,7 +151,7 @@ def create_monday_item(order):
     if order.get('phone'):
         col_vals['phone8'] = {'phone': str(order['phone']), 'countryShortName': 'RO'}
 
-    # ADRESA — plain text column with full delivery address
+    # ADRESA â plain text column with full delivery address
     addr_parts = [p for p in [
         order.get('address', ''),
         order.get('city', ''),
@@ -161,7 +161,7 @@ def create_monday_item(order):
     if full_address:
         col_vals['adress'] = full_address
 
-    # HARTA — location column with geocoded real coordinates
+    # HARTA â location column with geocoded real coordinates
     postal_code = order.get('postal_code', '')
     geo_city = order.get('city', '')
     geo_street = order.get('address', '')
@@ -286,7 +286,7 @@ def add_raw_order_update(item_id, order_data):
         billing = order_data.get('billingInfo', {})
         contact = billing.get('contactDetails', {}) if isinstance(billing, dict) else {}
         lines.append('Cumparator:')
-        lines.append(f"  Email: {buyer.get('email', '') or billing.get('email', '') or pick(order_data, 'contact', 'email') or 'N/A'}")
+        lines.append(f"  Email: {buyer.get('email', '') or billing.get('email', '') or pich(order_data, 'contact', 'email') or 'N/A'}")
         lines.append(f"  Telefon: {contact.get('phone', '') or buyer.get('phone', '') or billing.get('phone', '') or 'N/A'}")
         lines.append(f"  Nume: {contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or 'N/A')
         lines.append('')
@@ -581,7 +581,7 @@ def auto_parse(payload):
         return parse_wix_ecommerce_order(order_data), order_data
 
 def process_order_in_background(order, order_data):
-    """Create Monday item with retry logic — runs in a background thread."""
+    """Create Monday item with retry logic â runs in a background thread."""
     import time
     max_attempts = 3
     retry_delay = 600  # 10 minutes
@@ -605,7 +605,7 @@ def process_order_in_background(order, order_data):
             logger.error(f'Unexpected error creating Monday item for order #{order.get("order_number")}: {e}', exc_info=True)
             return
 
-# ─── Contact (Form Lead) Functions ───────────────────────────────────────────
+# âââ Contact (Form Lead) Functions âââââââââââââââââââââââââââââââââââââââââââ
 
 def decode_wix_jwt(token):
     """Decode Wix JWT without signature verification."""
@@ -656,12 +656,67 @@ def extract_contact_from_payload(raw_body, json_body):
 
     return None
 
+def extract_contact_from_old_form(json_body):
+    """Extract contact info from Old Wix Forms payload.
+
+    Old Wix Forms sends:
+    {
+        "formName": "Contact Form",
+        "submissions": [
+            {"fieldTitle": "Telefon", "fieldInputValue": "0744..."},
+            {"fieldTitle": "Nume", "fieldInputValue": "Ion Popescu"},
+            ...
+        ],
+        "contactId": "xxx",
+        "field:comp-xxx": "actual_value",
+        ...
+    }
+    """
+    if not isinstance(json_body, dict):
+        return None
+
+    contact = {}
+
+    # Try submissions array first (has human-readable field titles)
+    submissions = json_body.get('submissions', [])
+    if isinstance(submissions, list):
+        for sub in submissions:
+            if not isinstance(sub, dict):
+                continue
+            title = (sub.get('fieldTitle') or sub.get('field_title') or '').lower().strip()
+            value = (sub.get('fieldInputValue') or sub.get('fieldValue') or
+                     sub.get('field_value') or sub.get('value') or '').strip()
+            if not value:
+                continue
+            if any(t in title for t in ['telefon', 'phone', 'tel', 'mobil', 'numar']):
+                contact['phone'] = value
+            elif any(t in title for t in ['email', 'e-mail', 'mail']):
+                contact['email'] = value
+            elif any(t in title for t in ['nume', 'name', 'prenume', 'client']):
+                if 'name' not in contact:
+                    contact['name'] = value
+            elif any(t in title for t in ['mesaj', 'message', 'intrebare', 'detalii', 'observ']):
+                contact['message'] = value
+
+    # Include contactId for traceability
+    if json_body.get('contactId'):
+        contact['contactId'] = json_body['contactId']
+
+    logger.info(f'Old form extracted contact keys: {list(contact.keys())}')
+
+    # Return if we have at least one identifying field
+    if contact.get('phone') or contact.get('email') or contact.get('contactId'):
+        return contact
+
+    return None
+
+
 def create_lead_monday_item(contact, form_name=None):
     """Create a Monday item in LEAD-URI board from a Wix contact.
 
     Handles two contact formats:
-    - Format A: CRM nested (New contact created) — info.phones.items[], info.emails.items[]
-    - Format B: flat (Form submitted)            — contact.phone, contact.email directly
+    - Format A: CRM nested (New contact created) â info.phones.items[], info.emails.items[]
+    - Format B: flat (Form submitted)            â contact.phone, contact.email directly
     """
     info = contact.get('info', {})
     primary = contact.get('primaryInfo', {})
@@ -694,7 +749,7 @@ def create_lead_monday_item(contact, form_name=None):
     date_str = created[:10] if created else datetime.utcnow().strftime('%Y-%m-%d')
 
     identifier = phone or email or contact.get('id', '') or contact.get('contactId', 'Lead nou')
-    item_name = f'{identifier} — {final_form_name}'
+    item_name = f'{identifier} â {final_form_name}'
 
     col_vals = {
         'sursa_lead': {'label': 'CityCATS.ro'},
@@ -756,48 +811,4 @@ def wix_order_webhook():
 
 @app.route('/webhook/wix-contact', methods=['POST'])
 def wix_contact_webhook():
-    """Handle Wix contact-created webhooks — creates lead in Monday LEAD-URI board."""
-    ts = datetime.utcnow().isoformat()
-    logger.info(f'[{ts}] Contact webhook received')
-
-    try:
-        raw = request.get_data(as_text=True)
-        logger.info(f'Content-type: {request.content_type}, body length: {len(raw)}')
-
-        try:
-            json_body = request.get_json(force=True, silent=True)
-        except Exception:
-            json_body = None
-
-        contact = extract_contact_from_payload(raw, json_body)
-
-        if not contact:
-            logger.warning(f'Could not extract contact. Body preview: {raw[:300]}')
-            return jsonify({'received': True, 'status': 'no_contact'}), 200
-
-        source_type = contact.get('source', {}).get('sourceType', '')
-        if source_type and source_type != 'WIX_FORMS':
-            logger.info(f'Ignoring contact — source: {source_type}')
-            return jsonify({'received': True, 'status': 'ignored', 'source': source_type}), 200
-
-        # Extract form name from payload (available when trigger = "Form submitted")
-        payload_form_name = (json_body or {}).get('formName', '') or ''
-
-        logger.info(f'Contact received, form: {payload_form_name or "(from label key)"}')
-        result = create_lead_monday_item(contact, form_name=payload_form_name)
-
-        item = result.get('data', {}).get('create_item', {})
-        if item.get('id'):
-            logger.info(f'Monday item created: {item["name"]} (ID: {item["id"]})')
-            return jsonify({'received': True, 'status': 'created', 'monday_id': item['id']}), 200
-        else:
-            logger.warning(f'Monday response: {str(result)[:300]}')
-            return jsonify({'received': True, 'status': 'monday_error', 'detail': str(result)[:200]}), 200
-
-    except Exception as e:
-        logger.error(f'Error in contact webhook: {e}', exc_info=True)
-        return jsonify({'received': True, 'status': 'error', 'message': str(e)}), 200
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    """Handle Wix contact-created and Old
