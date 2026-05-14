@@ -286,7 +286,7 @@ def add_raw_order_update(item_id, order_data):
         billing = order_data.get('billingInfo', {})
         contact = billing.get('contactDetails', {}) if isinstance(billing, dict) else {}
         lines.append('Cumparator:')
-        lines.append(f"  Email: {buyer.get('email', '') or billing.get('email', '') or pich(order_data, 'contact', 'email') or 'N/A'}")
+        lines.append(f"  Email: {buyer.get('email', '') or billing.get('email', '') or pick(order_data, 'contact', 'email') or 'N/A'}")
         lines.append(f"  Telefon: {contact.get('phone', '') or buyer.get('phone', '') or billing.get('phone', '') or 'N/A'}")
         lines.append(f"  Nume: {contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or 'N/A')
         lines.append('')
@@ -677,14 +677,21 @@ def extract_contact_from_old_form(json_body):
 
     contact = {}
 
+    def _norm(s):
+        """Normalize Romanian diacritics for field-title matching."""
+        return (s.lower().strip()
+                .replace('Ä', 'a').replace('Ã¢', 'a').replace('Ã®', 'i')
+                .replace('È', 's').replace('Å', 's')
+                .replace('È', 't').replace('Å£', 't'))
+
     # Try submissions array first (has human-readable field titles)
     submissions = json_body.get('submissions', [])
     if isinstance(submissions, list):
         for sub in submissions:
             if not isinstance(sub, dict):
                 continue
-            title = (sub.get('fieldTitle') or sub.get('field_title') or
-                     sub.get('label') or sub.get('Label') or '').lower().strip()
+            title = _norm(sub.get('fieldTitle') or sub.get('field_title') or
+                          sub.get('label') or sub.get('Label') or '')
             value = (sub.get('fieldInputValue') or sub.get('fieldValue') or
                      sub.get('field_value') or sub.get('value') or '').strip()
             if not value:
@@ -728,7 +735,7 @@ def create_lead_monday_item(contact, form_name=None):
 
     # Format A: CRM nested
     phones = info.get('phones', {}).get('items', [])
-    phone = phones[0].get('phone', '') if phones else primary.get('Phone', '')
+    phone = phones[0].get('phone', '') if phones else primary.get('phone', '')
     emails = info.get('emails', {}).get('items', [])
     email = emails[0].get('email', '') if emails else primary.get('email', '')
     addresses = info.get('addresses', {}).get('items', [])
@@ -736,9 +743,14 @@ def create_lead_monday_item(contact, form_name=None):
     label_keys = info.get('labelKeys', {}).get('items', [])
     label_key = label_keys[0] if label_keys else ''
 
+    # CRM nested name (info.name.first / info.name.last)
+    crm_first = info.get('name', {}).get('first', '')
+    crm_last  = info.get('name', {}).get('last', '')
+    crm_name  = f'{crm_first} {crm_last}'.strip()
+
     # Format B: flat contact (Form submitted trigger)
     if not phone:
-        phone = contact.get('Phone', '')
+        phone = contact.get('phone', '') or contact.get('Phone', '')
     if not email:
         email = contact.get('email', '')
     if not city:
@@ -746,8 +758,8 @@ def create_lead_monday_item(contact, form_name=None):
         if isinstance(addr, dict):
             city = addr.get('addressLine', '') or addr.get('city', '')
 
-    # Old form flat fields
-    name       = contact.get('name', '')
+    # Old form flat fields (overrides CRM name if present)
+    name       = contact.get('name', '') or crm_name
     localitate = contact.get('localitate', '') or city
     adresa     = contact.get('adresa', '')
     message    = contact.get('message', '')
@@ -918,4 +930,3 @@ def wix_contact_webhook():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-   
