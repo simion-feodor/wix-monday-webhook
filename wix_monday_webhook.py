@@ -758,8 +758,8 @@ def create_lead_monday_item(contact, form_name=None):
         if isinstance(addr, dict):
             city = addr.get('addressLine', '') or addr.get('city', '')
 
-    # Old form flat fields (overrides CRM name if present)
-    name       = contact.get('name', '') or crm_name
+    # CRM name has priority; flat 'name' field is fallback for old forms
+    name       = crm_name or contact.get('name', '')
     localitate = contact.get('localitate', '') or city
     adresa     = contact.get('adresa', '')
     message    = contact.get('message', '')
@@ -771,9 +771,9 @@ def create_lead_monday_item(contact, form_name=None):
     created = contact.get('createdDate', '')
     date_str = created[:10] if created else datetime.utcnow().strftime('%Y-%m-%d')
 
-    # Item name: Nume â FormName (fallback to phone/email if no name)
+    # Item name: just the customer name (fallback to phone/email if no name)
     identifier = name or phone or email or contact.get('id', '') or contact.get('contactId', 'Lead nou')
-    item_name = f'{identifier} â {final_form_name}'
+    item_name = identifier
 
     col_vals = {
         'sursa_lead': {'label': 'CityCATS.ro'},
@@ -930,3 +930,4 @@ def wix_contact_webhook():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+        
