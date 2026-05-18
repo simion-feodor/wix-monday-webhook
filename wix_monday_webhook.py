@@ -570,7 +570,7 @@ def auto_parse(payload):
     logger.info(f'Order data keys: {list(order_data.keys()) if isinstance(order_data, dict) else type(order_data)}')
     if not isinstance(order_data, dict):
         raise ValueError(f'Could not parse payload into dict, got: {type(order_data)}')
-    if 'priceSummary' in order_data or 'lineItems' in order_data or 'billingInfo' in order_data:
+    if 'priceSummary' in order_data or @lineItems' in order_data or 'billingInfo' in order_data:
         return parse_wix_ecommerce_order(order_data), order_data
     elif 'totals' in order_data or ('order' in order_data and isinstance(order_data.get('order'), dict)):
         if 'order' in order_data:
@@ -930,4 +930,3 @@ def wix_contact_webhook():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-
