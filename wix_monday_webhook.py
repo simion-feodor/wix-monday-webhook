@@ -851,11 +851,11 @@ def fetch_monday_order_numbers():
         return set()
 
 
-def fetch_wix_recent_orders(days=3):
+def fetch_wix_recent_orders(minutes=60):
     """Return list of recent Wix eCommerce orders (raw dicts)."""
     try:
         from datetime import timedelta
-        since = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        since = (datetime.utcnow() - timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
         url = 'https://www.wixapis.com/ecom/v1/orders/search'
         headers = {'Authorization': WIX_API_KEY, 'wix-site-id': WIX_SITE_ID,
                    'Content-Type': 'application/json'}
@@ -879,7 +879,7 @@ def reconcile_wix_to_monday():
     import time
     logger.info('Reconciliation started...')
     try:
-        wix_orders = fetch_wix_recent_orders(days=3)
+        wix_orders = fetch_wix_recent_orders(minutes=60)
         if not wix_orders:
             logger.info('Reconciliation: no Wix orders returned, skipping')
             return
