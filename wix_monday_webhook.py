@@ -828,6 +828,105 @@ def create_lead_monday_item(contact, form_name=None):
 
     return result
 
+def fetch_monday_order_numbers():
+    """Return set of order numbers already in the Monday board (as strings)."""
+    try:
+        query = '''{ boards(ids: [804109007]) {
+            groups(ids: ["new_group3802"]) {
+                items_page(limit: 500) {
+                    items { column_values(ids: ["text_mm2bgzbx"]) { text } }
+                }
+            }
+        } }'''
+        data = _post_monday(query)
+        nums = set()
+        for item in (data.get('data', {}).get('boards', [{}])[0]
+                         .get('groups', [{}])[0]
+                         .get('items_page', {}).get('items', [])):
+            for col in item.get('column_values', []):
+                val = (col.get('text') or '').strip()
+                if val:
+                    nums.add(val)
+        logger.info(f'Monday board has {len(nums)} order numbers')
+        return nums
+    except Exception as e:
+        logger.error(f'fetch_monday_order_numbers failed: {e}')
+        return set()
+
+
+def fetch_wix_recent_orders(days=3):
+    """Return list of recent Wix eCommerce orders (raw dicts)."""
+    try:
+        from datetime import timedelta
+        since = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        url = 'https://www.wixapis.com/ecom/v1/orders/search'
+        headers = {'Authorization': WIX_API_KEY, 'wix-site-id': WIX_SITE_ID,
+                   'Content-Type': 'application/json'}
+        body = {
+            'filter': {'createdDate': {'$gte': since}},
+            'sort': [{'fieldName': 'number', 'order': 'DESC'}],
+            'paging': {'limit': 100}
+        }
+        resp = requests.post(url, json=body, headers=headers, timeout=15)
+        resp.raise_for_status()
+        orders = resp.json().get('orders', [])
+        logger.info(f'Wix returned {len(orders)} orders in last {days} days')
+        return orders
+    except Exception as e:
+        logger.error(f'fetch_wix_recent_orders failed: {e}')
+        return []
+
+
+def reconcile_wix_to_monday():
+    """Find Wix orders missing from Monday and create them automatically."""
+    import time
+    logger.info('Reconciliation started...')
+    try:
+        wix_orders = fetch_wix_recent_orders(days=3)
+        if not wix_orders:
+            logger.info('Reconciliation: no Wix orders returned, skipping')
+            return
+        monday_nums = fetch_monday_order_numbers()
+        missing = []
+        for od in wix_orders:
+            num = str(od.get('number') or od.get('orderNumber') or '')
+            if num and num not in monday_nums:
+                missing.append(od)
+        if not missing:
+            logger.info('Reconciliation: all Wix orders present in Monday - OK')
+            return
+        logger.warning(f'Reconciliation: {len(missing)} orders missing from Monday: '
+                       + str([o.get('number') or o.get('orderNumber') for o in missing]))
+        for od in missing:
+            try:
+                order, order_data = auto_parse({'data': od})
+                if not order.get('notes'):
+                    order['notes'] = fetch_wix_buyer_note(od.get('id', ''))
+                t = threading.Thread(target=process_order_in_background,
+                                     args=(order, order_data))
+                t.daemon = True
+                t.start()
+                logger.info(f'Reconciliation: queued order #{order.get("order_number")} for Monday')
+                time.sleep(2)
+            except Exception as e:
+                logger.error(f'Reconciliation error for order {od.get("number")}: {e}', exc_info=True)
+    except Exception as e:
+        logger.error(f'Reconciliation failed: {e}', exc_info=True)
+
+
+def start_reconciliation_scheduler():
+    """Background thread: reconcile Wix to Monday every 10 minutes."""
+    import time
+    def _loop():
+        time.sleep(60)       # 1 min after startup before first run
+        while True:
+            reconcile_wix_to_monday()
+            time.sleep(600)  # then every 10 minutes
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    logger.info('Reconciliation scheduler started (every 10 min)')
+
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'wix-monday-webhook'}), 200
@@ -927,6 +1026,17 @@ def wix_contact_webhook():
         logger.error(f'Error in contact webhook: {e}', exc_info=True)
         return jsonify({'received': True, 'status': 'error', 'message': str(e)}), 200
 
+
+
+@app.route('/reconcile', methods=['GET', 'POST'])
+def reconcile_endpoint():
+    """Manually trigger reconciliation."""
+    threading.Thread(target=reconcile_wix_to_monday, daemon=True).start()
+    return jsonify({'status': 'reconciliation started'}), 200
+
+
+# Start reconciliation scheduler (runs in background under gunicorn too)
+start_reconciliation_scheduler()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
