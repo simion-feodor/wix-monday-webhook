@@ -829,25 +829,22 @@ def create_lead_monday_item(contact, form_name=None):
     return result
 
 def fetch_monday_order_numbers():
-    """Return set of order numbers already in the Monday board (as strings)."""
+    """Return set of order numbers already in the Monday board (all groups, as strings)."""
     try:
         query = '''{ boards(ids: [804109007]) {
-            groups(ids: ["new_group3802"]) {
-                items_page(limit: 500) {
-                    items { column_values(ids: ["text_mm2bgzbx"]) { text } }
-                }
+            items_page(limit: 500) {
+                items { column_values(ids: ["text_mm2bgzbx"]) { text } }
             }
         } }'''
         data = _post_monday(query)
         nums = set()
         for item in (data.get('data', {}).get('boards', [{}])[0]
-                         .get('groups', [{}])[0]
                          .get('items_page', {}).get('items', [])):
             for col in item.get('column_values', []):
                 val = (col.get('text') or '').strip()
                 if val:
                     nums.add(val)
-        logger.info(f'Monday board has {len(nums)} order numbers')
+        logger.info(f'Monday board has {len(nums)} order numbers across all groups')
         return nums
     except Exception as e:
         logger.error(f'fetch_monday_order_numbers failed: {e}')
