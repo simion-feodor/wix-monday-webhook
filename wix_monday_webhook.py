@@ -786,8 +786,9 @@ def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
         col_vals['e_mail6'] = {'email': email, 'text': email}
     if localitate:
         col_vals['text'] = localitate          # ORAS column
-    if adresa:
-        col_vals['adress'] = adresa            # ADRESA column
+    adress_val = adresa or localitate  # adresa separata sau campul combinat oras/adresa
+    if adress_val:
+        col_vals['adress'] = adress_val        # ADRESA column
 
     col_vals_str = json.dumps(json.dumps(col_vals))  # double-encoded for inline GraphQL
 
