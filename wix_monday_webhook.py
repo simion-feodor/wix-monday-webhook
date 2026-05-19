@@ -783,8 +783,6 @@ def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
         col_vals['phone8'] = {'phone': phone, 'countryShortName': 'RO'}
     if email:
         col_vals['e_mail6'] = {'email': email, 'text': email}
-    if localitate:
-        col_vals['text'] = localitate          # ORAS column
     adress_val = adresa or localitate  # adresa separata sau campul combinat oras/adresa
     if adress_val:
         col_vals['adress'] = adress_val        # ADRESA column
