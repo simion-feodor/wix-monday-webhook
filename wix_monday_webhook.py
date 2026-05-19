@@ -696,7 +696,7 @@ def extract_contact_from_old_form(json_body):
                      sub.get('field_value') or sub.get('value') or '').strip()
             if not value:
                 continue
-            if any(t in title for t in ['telefon', 'phone', 'tel', 'mobil', 'numar']):
+            if any(t in title for t in ['telefon', 'phone', 'mobil', 'numar']):
                 contact['phone'] = value
             elif any(t in title for t in ['email', 'e-mail', 'mail']):
                 contact['email'] = value
@@ -806,7 +806,7 @@ def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
 
     # Add update with message content if present
     if message:
-        item_id = ((result or {}).get('data') or {}).get('create_item', {}).get('id')
+        item_id = (((result or {}).get('data') or {}).get('create_item') or {}).get('id')
         if item_id:
             try:
                 update_lines = []
