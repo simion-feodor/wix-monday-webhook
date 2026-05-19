@@ -723,7 +723,7 @@ def extract_contact_from_old_form(json_body):
     return None
 
 
-def create_lead_monday_item(contact, form_name=None):
+def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
     """Create a Monday item in LEAD-URI board from a Wix contact.
 
     Handles two contact formats:
@@ -776,7 +776,7 @@ def create_lead_monday_item(contact, form_name=None):
     item_name = identifier
 
     col_vals = {
-        'sursa_lead': {'label': 'CityCATS.ro'},
+        'sursa_lead': {'label': source},
         'status':     {'label': 'LEAD'},
         'lead':       {'date': date_str},
     }
@@ -966,6 +966,8 @@ def wix_contact_webhook():
         raw = request.get_data(as_text=True)
         logger.info(f'Content-type: {request.content_type}, body length: {len(raw)}')
         logger.info(f'Payload preview: {raw[:500]}')
+        site = request.args.get('site', '')
+        source = 'PisiciLaFerestre.ro' if site == 'pisici' else 'CityCATS.ro'
 
         try:
             json_body = request.get_json(force=True, silent=True)
@@ -986,7 +988,7 @@ def wix_contact_webhook():
             if not contact:
                 logger.warning(f'Old Wix Forms: could not extract contact. Body: {raw[:300]}')
                 return jsonify({'received': True, 'status': 'no_contact_old_form'}), 200
-            result = create_lead_monday_item(contact, form_name=form_name)
+            result = create_lead_monday_item(contact, form_name=form_name, source=source)
             item = result.get('data', {}).get('create_item', {})
             if item.get('id'):
                 logger.info(f'Monday item created (old form): {item["name"]} (ID: {item["id"]})')
@@ -1009,7 +1011,7 @@ def wix_contact_webhook():
 
         payload_form_name = (json_body or {}).get('formName', '') or ''
         logger.info(f'Contact received, form: {payload_form_name or "(from label key)"}')
-        result = create_lead_monday_item(contact, form_name=payload_form_name)
+        result = create_lead_monday_item(contact, form_name=payload_form_name, source=source)
 
         item = result.get('data', {}).get('create_item', {})
         if item.get('id'):
