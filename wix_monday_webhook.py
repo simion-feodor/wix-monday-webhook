@@ -1,4 +1,5 @@
 import os
+import unicodedata
 import re
 import json
 import base64
@@ -678,11 +679,9 @@ def extract_contact_from_old_form(json_body):
     contact = {}
 
     def _norm(s):
-        """Normalize Romanian diacritics for field-title matching."""
-        return (s.lower().strip()
-                .replace('Ä', 'a').replace('Ã¢', 'a').replace('Ã®', 'i')
-                .replace('È', 's').replace('Å', 's')
-                .replace('È', 't').replace('Å£', 't'))
+        """Normalize string: lowercase, strip diacritics via unicodedata."""
+        s = unicodedata.normalize('NFD', s.lower().strip())
+        return ''.join(c for c in s if unicodedata.category(c) != 'Mn')
 
     # Try submissions array first (has human-readable field titles)
     submissions = json_body.get('submissions', [])
