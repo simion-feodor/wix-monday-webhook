@@ -805,7 +805,7 @@ def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
 
     # Add update with message content if present
     if message:
-        item_id = result.get('data', {}).get('create_item', {}).get('id')
+        item_id = (result.get('data') or {}).get('create_item', {}).get('id')
         if item_id:
             try:
                 update_lines = []
@@ -967,7 +967,7 @@ def wix_contact_webhook():
         logger.info(f'Content-type: {request.content_type}, body length: {len(raw)}')
         logger.info(f'Payload preview: {raw[:500]}')
         site = request.args.get('site', '')
-        source = 'PisiciLaFerestre.ro' if site == 'pisici' else 'CityCATS.ro'
+        source = 'Pisicilaferestre' if site == 'pisici' else 'CityCATS.ro'
 
         try:
             json_body = request.get_json(force=True, silent=True)
