@@ -802,10 +802,11 @@ def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
     }}'''
 
     result = _post_monday(query)
+    logger.info(f"Monday create_item raw result: {result}")
 
     # Add update with message content if present
     if message:
-        item_id = (result.get('data') or {}).get('create_item', {}).get('id')
+        item_id = ((result or {}).get('data') or {}).get('create_item', {}).get('id')
         if item_id:
             try:
                 update_lines = []
