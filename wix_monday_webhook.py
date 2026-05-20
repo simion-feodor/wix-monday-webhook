@@ -851,10 +851,11 @@ def fetch_monday_order_numbers():
 
 
 def fetch_wix_recent_orders(minutes=60):
-    """Return list of recent Wix eCommerce orders (raw dicts)."""
+    """Return list of recent Wix eCommerce orders created in the last N minutes."""
     try:
         from datetime import timedelta
-        since = (datetime.utcnow() - timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        since_dt = datetime.utcnow() - timedelta(minutes=minutes)
+        since = since_dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
         url = 'https://www.wixapis.com/ecom/v1/orders/search'
         headers = {'Authorization': WIX_API_KEY, 'wix-site-id': WIX_SITE_ID,
                    'Content-Type': 'application/json'}
@@ -865,8 +866,10 @@ def fetch_wix_recent_orders(minutes=60):
         }
         resp = requests.post(url, json=body, headers=headers, timeout=15)
         resp.raise_for_status()
-        orders = resp.json().get('orders', [])
-        logger.info(f'Wix returned {len(orders)} orders in last {minutes} minutes')
+        all_orders = resp.json().get('orders', [])
+        # Python-side filter as safety net in case the API filter is ignored
+        orders = [o for o in all_orders if (o.get('createdDate') or o.get('dateCreated') or '') >= since]
+        logger.info(f'Wix returned {len(all_orders)} orders total, {len(orders)} within last {minutes} min (since {since})')
         return orders
     except Exception as e:
         logger.error(f'fetch_wix_recent_orders failed: {e}')
