@@ -866,7 +866,7 @@ def fetch_wix_recent_orders(minutes=60):
         resp = requests.post(url, json=body, headers=headers, timeout=15)
         resp.raise_for_status()
         orders = resp.json().get('orders', [])
-        logger.info(f'Wix returned {len(orders)} orders in last {days} days')
+        logger.info(f'Wix returned {len(orders)} orders in last {minutes} minutes')
         return orders
     except Exception as e:
         logger.error(f'fetch_wix_recent_orders failed: {e}')
