@@ -233,10 +233,12 @@ def add_order_summary_update(item_id, order):
         name = p.get('name', 'Produs')
         qty = p.get('quantity', 1)
         price = p.get('price', '')
+        lines.append('')
+        lines.append(f"  {name}")
         if price:
-            lines.append(f"  {name} | Cantitate: {qty} | Pret: {price} RON")
+            lines.append(f"  Cantitate: {qty} | Pret: {price} RON")
         else:
-            lines.append(f"  {name} | Cantitate: {qty}")
+            lines.append(f"  Cantitate: {qty}")
     if not order.get('products'):
         lines.append('  (produse necunoscute)')
     lines.append('')
