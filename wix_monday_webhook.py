@@ -782,7 +782,8 @@ def create_lead_monday_item(contact, form_name=None, source='CityCATS.ro'):
         'lead':       {'date': date_str},
     }
     if phone:
-        col_vals['phone8'] = {'phone': phone, 'countryShortName': 'RO'}
+        phone_clean = re.sub(r'[\s\-\(\)]', '', phone)
+        col_vals['phone8'] = {'phone': phone_clean, 'countryShortName': 'RO'}
     if email:
         col_vals['e_mail6'] = {'email': email, 'text': email}
     adress_val = adresa or localitate  # adresa separata sau campul combinat oras/adresa
@@ -993,7 +994,7 @@ def wix_contact_webhook():
                 logger.warning(f'Old Wix Forms: could not extract contact. Body: {raw[:300]}')
                 return jsonify({'received': True, 'status': 'no_contact_old_form'}), 200
             result = create_lead_monday_item(contact, form_name=form_name, source=source)
-            item = result.get('data', {}).get('create_item', {})
+            item = ((result or {}).get('data') or {}).get('create_item') or {}
             if item.get('id'):
                 logger.info(f'Monday item created (old form): {item["name"]} (ID: {item["id"]})')
                 return jsonify({'received': True, 'status': 'created', 'monday_id': item['id']}), 200
@@ -1017,7 +1018,7 @@ def wix_contact_webhook():
         logger.info(f'Contact received, form: {payload_form_name or "(from label key)"}')
         result = create_lead_monday_item(contact, form_name=payload_form_name, source=source)
 
-        item = result.get('data', {}).get('create_item', {})
+        item = ((result or {}).get('data') or {}).get('create_item') or {}
         if item.get('id'):
             logger.info(f'Monday item created: {item["name"]} (ID: {item["id"]})')
             return jsonify({'received': True, 'status': 'created', 'monday_id': item['id']}), 200
