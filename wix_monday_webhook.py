@@ -398,6 +398,14 @@ def parse_wix_ecommerce_order(order_data):
 
     shipping = order_data.get('shippingInfo', {})
     shipping_addr = shipping.get('shipmentDetails', {}).get('address', {})
+    # shippingDestination used in newer Wix orders (shippingInfo.shippingDestination.address)
+    shipping_dest = shipping.get('shippingDestination', {}) if isinstance(shipping, dict) else {}
+    shipping_dest_addr = shipping_dest.get('address', {}) if isinstance(shipping_dest, dict) else {}
+    shipping_dest_contact = shipping_dest.get('contactDetails', {}) if isinstance(shipping_dest, dict) else {}
+    # recipientInfo - delivery recipient (may differ from billing)
+    recipient = order_data.get('recipientInfo', {}) if isinstance(order_data, dict) else {}
+    recipient_addr = recipient.get('address', {}) if isinstance(recipient, dict) else {}
+    recipient_contact = recipient.get('contactDetails', {}) if isinstance(recipient, dict) else {}
 
     pricing = order_data.get('priceSummary', {})
     total_str = pricing.get('total', {})
@@ -436,13 +444,28 @@ def parse_wix_ecommerce_order(order_data):
     phone = (contact.get('phone') or
              top_contact.get('phone') or
              top_contact.get('contactDetails', {}).get('phone') or
-             billing.get('phone') or '')
+             billing.get('phone') or
+             shipping_dest_contact.get('phone') or
+             recipient_contact.get('phone') or '')
 
     street = (address_obj.get('addressLine') or
               address_obj.get('streetAddress', {}).get('name', '') or
-              shipping_addr.get('addressLine', ''))
-    city = address_obj.get('city', '') or shipping_addr.get('city', '')
-    country = address_obj.get('country', '') or shipping_addr.get('country', 'Romania') or 'Romania'
+              shipping_addr.get('addressLine', '') or
+              shipping_dest_addr.get('addressLine', '') or
+              (shipping_dest_addr.get('streetAddress') or {}).get('name', '') or
+              recipient_addr.get('addressLine', '') or
+              (recipient_addr.get('streetAddress') or {}).get('name', '') or
+              '')
+    city = (address_obj.get('city', '') or
+            shipping_addr.get('city', '') or
+            shipping_dest_addr.get('city', '') or
+            recipient_addr.get('city', '') or
+            '')
+    country = (address_obj.get('country', '') or
+               shipping_addr.get('country', '') or
+               shipping_dest_addr.get('country', '') or
+               recipient_addr.get('country', '') or
+               'Romania') or 'Romania'
 
     products = []
     for line in order_data.get('lineItems', []):
@@ -464,9 +487,16 @@ def parse_wix_ecommerce_order(order_data):
             price_val = ''
         products.append({'name': pname, 'quantity': line.get('quantity', 1), 'price': price_val})
 
-    first = contact.get('firstName', billing.get('firstName', ''))
-    last = contact.get('lastName', billing.get('lastName', ''))
+    first = (contact.get('firstName', '') or
+             billing.get('firstName', '') or
+             shipping_dest_contact.get('firstName', '') or
+             recipient_contact.get('firstName', ''))
+    last = (contact.get('lastName', '') or
+            billing.get('lastName', '') or
+            shipping_dest_contact.get('lastName', '') or
+            recipient_contact.get('lastName', ''))
     customer_name = f"{first} {last}".strip() or 'Client'
+    logger.info(f'Parsed: name={customer_name!r}, phone={phone!r}, city={city!r}, street={street!r}')
 
     buyer_info = order_data.get('buyerInfo', {})
     notes = (order_data.get('buyerNote') or
@@ -513,6 +543,8 @@ def parse_wix_ecommerce_order(order_data):
             pass
 
     postal_code = (address_obj.get('postalCode', '') or
+                   shipping_dest_addr.get('postalCode', '') or
+                   recipient_addr.get('postalCode', '') or
                    logistics.get('shippingDestination', {}).get('address', {}).get('postalCode', ''))
 
     return {
