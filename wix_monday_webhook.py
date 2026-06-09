@@ -65,6 +65,27 @@ def fetch_wix_buyer_note(order_id):
         logger.warning(f'Failed to fetch Wix buyerNote: {e}')
         return ''
 
+def fetch_wix_order_by_number(order_number):
+    """Fetch full order data from Wix API by order number (for incomplete webhook payloads)."""
+    if not WIX_API_KEY or not order_number:
+        return None
+    try:
+        url = 'https://www.wixapis.com/ecom/v1/orders/search'
+        headers = {'Authorization': WIX_API_KEY, 'wix-site-id': WIX_SITE_ID,
+                   'Content-Type': 'application/json'}
+        body = {'filter': {'number': int(order_number)}, 'paging': {'limit': 1}}
+        resp = requests.post(url, json=body, headers=headers, timeout=10)
+        resp.raise_for_status()
+        orders = resp.json().get('orders', [])
+        if orders:
+            logger.info(f'Fetched full Wix order #{order_number} from API')
+            return orders[0]
+        logger.warning(f'No order found in Wix API for #{order_number}')
+        return None
+    except Exception as e:
+        logger.warning(f'fetch_wix_order_by_number failed for #{order_number}: {e}')
+        return None
+
 def clean_for_geocoding(address):
     """Simplify address for geocoders: remove apt/unit details like sc., ap., bl."""
     cleaned = re.sub(r'\b(sc|ap|bl|et|int|cam)\s*\.?\s*[A-Za-z0-9]+\b', '', address, flags=re.IGNORECASE)
@@ -949,6 +970,17 @@ def wix_order_webhook():
         logger.info(f'Parsed payload keys: {list(payload.keys()) if isinstance(payload, dict) else type(payload)}')
         order, order_data = auto_parse(payload)
         logger.info(f'Order parsed: {order.get("customer_name")} #{order.get("order_number")} total={order.get("total")}')
+
+        # If customer info is missing (payment webhook without billingInfo), fetch full order from Wix API
+        if order.get('customer_name', 'Client') in ('Client', '', None) and not order.get('phone') and not order.get('address'):
+            order_num = order.get('order_number')
+            if order_num:
+                logger.info(f'Customer info missing for #{order_num}, fetching full order from Wix API')
+                full_order = fetch_wix_order_by_number(order_num)
+                if full_order:
+                    order, order_data = parse_wix_ecommerce_order(full_order), full_order
+                    logger.info(f'Re-parsed with full order: {order.get("customer_name")} #{order.get("order_number")}')
+
         if not order.get('notes'):
             wix_order_id = order_data.get('id', '')
             order['notes'] = fetch_wix_buyer_note(wix_order_id)
