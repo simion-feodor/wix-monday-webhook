@@ -87,9 +87,13 @@ def fetch_wix_order_by_number(order_number):
         return None
 
 def clean_for_geocoding(address):
-    """Simplify address for geocoders: remove apt/unit details like sc., ap., bl."""
-    cleaned = re.sub(r'\b(sc|ap|bl|et|int|cam)\s*\.?\s*[A-Za-z0-9]+\b', '', address, flags=re.IGNORECASE)
-    cleaned = re.sub(r',\s*,', ',', cleaned)
+    """Simplify address for geocoders: remove apt/unit details like bloc, etaj, sc., ap., bl."""
+    # Remove full Romanian words + their following value (e.g. "bloc 8", "etaj 7", "scara B")
+    cleaned = re.sub(r'\b(bloc|etaj|scara|apartament)\s+[A-Za-z0-9]+\b', '', address, flags=re.IGNORECASE)
+    # Remove abbreviated forms: sc., ap., bl., et., int., cam. + following value
+    cleaned = re.sub(r'\b(sc|ap|bl|et|int|cam)\s*\.?\s*[A-Za-z0-9]+\b', '', cleaned, flags=re.IGNORECASE)
+    # Collapse multiple consecutive commas into one
+    cleaned = re.sub(r',(\s*,)+', ',', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip().strip(',').strip()
     return cleaned
 
