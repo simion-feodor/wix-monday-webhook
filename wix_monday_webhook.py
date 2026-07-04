@@ -95,6 +95,8 @@ def clean_for_geocoding(address):
     # Collapse multiple consecutive commas into one
     cleaned = re.sub(r',(\s*,)+', ',', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip().strip(',').strip()
+    # Remove Romanian house number prefix "nr." which confuses Nominatim
+    cleaned = re.sub(r'\bnr\.?\s+', '', cleaned, flags=re.IGNORECASE)
     # Normalize Romanian diacritics so Nominatim can match city/street names
     for src, dst in [('\u0219','s'),('\u0218','S'),('\u015f','s'),('\u015e','S'),
                      ('\u021b','t'),('\u021a','T'),('\u0163','t'),('\u0162','T'),
