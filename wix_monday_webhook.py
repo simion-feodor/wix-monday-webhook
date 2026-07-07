@@ -654,6 +654,17 @@ def process_order_in_background(order, order_data):
     max_attempts = 3
     retry_delay = 600  # 10 minutes
 
+    # Duplicate check: skip if order already exists in Monday (Wix sends multiple webhooks per order)
+    order_num = str(order.get('order_number') or '')
+    if order_num:
+        try:
+            existing_nums = fetch_monday_order_numbers()
+            if order_num in existing_nums:
+                logger.info(f'Order #{order_num} already in Monday, skipping duplicate webhook')
+                return
+        except Exception as e:
+            logger.warning(f'Duplicate check failed for #{order_num}: {e} - proceeding with creation')
+
     for attempt in range(1, max_attempts + 1):
         try:
             item_id = create_monday_item(order)
